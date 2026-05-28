@@ -1,0 +1,54 @@
+# =============================================================================
+# SOURCE: https://urunc.io/tutorials/How-to-urunc-on-k8s/
+# SOURCE: https://urunc.io/design/ (k8s integration)
+#
+# DOCS STATE: "urunc leverages runc to spawn generic containers.
+#              urunc then spawns the unikernel container inside the Pod netns."
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-agent-web-tool
+  labels:
+    app: ai-agent-web-tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-agent-web-tool
+  template:
+    metadata:
+      labels:
+        app: ai-agent-web-tool
+    spec:
+      runtimeClassName: urunc
+      containers:
+        - name: web-tool
+          image: localhost/ai-sandbox/web-tool:latest
+          imagePullPolicy: Always
+          resources:
+            limits:
+              memory: "512Mi"
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      restartPolicy: Always
+      volumes:
+        - name: workspace
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-agent-web-tool
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: ai-agent-web-tool
+  type: ClusterIP

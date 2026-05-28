@@ -1,0 +1,30 @@
+# =============================================================================
+# FILE: build/bunnyfile
+# SOURCE: https://urunc.io/package/ (bunnyfile syntax)
+# SOURCE: https://nubificus.co.uk/blog/urunc_agent/ (Linux over QEMU)
+#
+# This builds a Linux-based microVM image for AI agent tools.
+# =============================================================================
+
+#syntax=harbor.nbfc.io/nubificus/bunny:latest
+version: v0.1
+
+platforms:
+  framework: linux          # [3a] Unikernel framework: linux (general-purpose VM)
+  monitor: qemu             # [3c] VMM: qemu
+  architecture: x86         # [3d] Target architecture
+
+rootfs:
+  from: local
+  path: rootfs              # Host directory containing the rootfs contents
+  type: raw                 # Raw rootfs; urunc will mount via virtiofs or 9pfs
+  include:
+    - src: /usr/local/bin/urunit
+      dst: /urunit
+
+kernel:
+  from: local
+  path: kernel              # Local Linux kernel image (for example, vmlinux)
+
+entrypoint: ["/urunit"]     # urunit sets up UID, GID, working dir, env
+cmd: ["sleep", "infinity"]  # Default cmdline; overridden per-tool at runtime

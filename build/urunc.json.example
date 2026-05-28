@@ -1,0 +1,10 @@
+{
+  "_comment": "This file is placed at /urunc.json inside the container rootfs.",
+  "_source": "https://urunc.io/package/ (Annotations section)",
+  "_note": "All values are base64 encoded as required by urunc docs.",
+  "com.urunc.unikernel.unikernelType": "bGludXg=",
+  "com.urunc.unikernel.hypervisor": "cWVtdQ==",
+  "com.urunc.unikernel.binary": "L3VydW5pdA==",
+  "com.urunc.unikernel.cmdline": "c2xlZXAgaW5maW5pdHk=",
+  "com.urunc.unikernel.mountRootfs": "dHJ1ZQ=="
+}

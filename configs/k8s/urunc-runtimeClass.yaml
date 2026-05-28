@@ -1,0 +1,9 @@
+# =============================================================================
+# SOURCE: https://urunc.io/tutorials/How-to-urunc-on-k8s/
+# DOCS STATE: "First, we need to add urunc as a runtime class for the k8s cluster"
+# =============================================================================
+kind: RuntimeClass
+apiVersion: node.k8s.io/v1
+metadata:
+  name: urunc
+handler: urunc

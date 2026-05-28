@@ -1,0 +1,18 @@
+# =============================================================================
+# FILE: configs/containerd/config.toml
+# SOURCE: https://urunc.io/installation/
+# =============================================================================
+
+version = 2
+
+[plugins."io.containerd.snapshotter.v1.devmapper"]
+  pool_name = "containerd-pool"
+  root_path = "/var/lib/containerd/io.containerd.snapshotter.v1.devmapper"
+  base_image_size = "10GB"
+  discard_blocks = true
+  fs_type = "ext2"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.urunc]
+  runtime_type = "io.containerd.urunc.v2"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.urunc.options]
+  BinaryName = "/usr/local/bin/urunc"

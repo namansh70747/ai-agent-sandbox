@@ -1,0 +1,41 @@
+# =============================================================================
+# SOURCE: https://urunc.io/tutorials/How-to-urunc-on-k8s/ (urunc-deploy section)
+# DOCS STATE: "urunc-deploy consists of several components and steps that
+# install urunc along with the supported hypervisors, configure containerd
+# and Kubernetes to use urunc."
+# =============================================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: urunc-deploy
+  namespace: kube-system
+  labels:
+    k8s-app: urunc-deploy
+spec:
+  selector:
+    matchLabels:
+      k8s-app: urunc-deploy
+  template:
+    metadata:
+      labels:
+        k8s-app: urunc-deploy
+    spec:
+      hostPID: true
+      hostNetwork: true
+      containers:
+        - name: urunc-deploy
+          image: harbor.nbfc.io/nubificus/urunc-deploy:latest
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host
+              mountPath: /host
+            - name: containerd-config
+              mountPath: /etc/containerd
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+        - name: containerd-config
+          hostPath:
+            path: /etc/containerd

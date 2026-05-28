@@ -1,0 +1,20 @@
+# =============================================================================
+# FILE: configs/urunc/config.toml
+# SOURCE: https://urunc.io/installation/
+# =============================================================================
+
+[monitors.qemu]
+path = "/opt/urunc/bin/qemu-system-x86_64"
+data_path = "/opt/urunc/share/qemu"
+
+[monitors.firecracker]
+path = "/opt/urunc/bin/firecracker"
+
+[monitors.hvt]
+path = "/opt/urunc/bin/solo5-hvt"
+
+[monitors.spt]
+path = "/opt/urunc/bin/solo5-spt"
+
+[extra_binaries.virtiofsd]
+path = "/opt/urunc/bin/virtiofsd"

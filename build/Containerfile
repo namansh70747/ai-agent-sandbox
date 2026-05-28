@@ -1,0 +1,29 @@
+# =============================================================================
+# FILE: build/Containerfile
+# SOURCE: https://urunc.io/package/ (Packaging with bunny)
+# SOURCE: https://nubificus.co.uk/blog/urunc_agent/ (Linux plus QEMU plus urunit)
+#
+# SYNTAX DIRECTIVE: Required by bunny to act as buildkit frontend.
+# From docs: "It is important to note that if we want to use bunny as a
+# frontend for buildkit we need to start the Containerfile with the following
+# line: #syntax=harbor.nbfc.io/nubificus/bunny:<version>"
+# =============================================================================
+
+#syntax=harbor.nbfc.io/nubificus/bunny:containerfile
+
+# Base image: lightweight Alpine with common tools
+FROM alpine:3.19
+
+RUN apk add --no-cache bash curl python3 py3-pip git
+
+# Include urunit init for Linux guests (optional but recommended per blog)
+COPY --from=harbor.nbfc.io/nubificus/urunit:latest /urunit /urunit
+
+WORKDIR /app
+
+# Labels become OCI annotations AND are embedded into urunc.json by bunny
+LABEL "com.urunc.unikernel.unikernelType"="linux"
+LABEL "com.urunc.unikernel.hypervisor"="qemu"
+LABEL "com.urunc.unikernel.binary"="/urunit"
+LABEL "com.urunc.unikernel.cmdline"=""
+LABEL "com.urunc.unikernel.mountRootfs"="true"

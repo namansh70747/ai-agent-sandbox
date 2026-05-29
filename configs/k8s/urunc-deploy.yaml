@@ -1,41 +1,80 @@
-# =============================================================================
-# SOURCE: https://urunc.io/tutorials/How-to-urunc-on-k8s/ (urunc-deploy section)
-# DOCS STATE: "urunc-deploy consists of several components and steps that
-# install urunc along with the supported hypervisors, configure containerd
-# and Kubernetes to use urunc."
-# =============================================================================
+# configs/k8s/urunc-deploy.yaml
+#
+# DaemonSet that installs urunc binaries on every Kubernetes node
+# and labels the node urunc.io/urunc-runtime=true.
+#
+# Source: https://urunc.io/tutorials/How-to-urunc-on-k8s/
+# Source: https://github.com/urunc-dev/urunc/tree/main/deployment/urunc-deploy
+#
+# Apply with:
+#   kubectl apply -f configs/k8s/urunc-deploy.yaml
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: urunc-deploy
   namespace: kube-system
   labels:
-    k8s-app: urunc-deploy
+    app: urunc-deploy
 spec:
   selector:
     matchLabels:
-      k8s-app: urunc-deploy
+      app: urunc-deploy
   template:
     metadata:
       labels:
-        k8s-app: urunc-deploy
+        app: urunc-deploy
     spec:
       hostPID: true
       hostNetwork: true
-      containers:
-        - name: urunc-deploy
-          image: harbor.nbfc.io/nubificus/urunc-deploy:latest
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      initContainers:
+        - name: install-urunc
+          image: alpine:3.19
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+
+              # Install urunc binary
+              # Source: https://urunc.io/installation/ (Option 2: Install latest release)
+              URUNC_VERSION=$(wget -qO- "https://api.github.com/repos/urunc-dev/urunc/releases/latest" \
+                | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//')
+              wget -qO /host/usr/local/bin/urunc \
+                "https://github.com/urunc-dev/urunc/releases/download/v${URUNC_VERSION}/urunc_static_${ARCH}"
+              chmod +x /host/usr/local/bin/urunc
+
+              # Install shim
+              wget -qO /host/usr/local/bin/containerd-shim-urunc-v2 \
+                "https://github.com/urunc-dev/urunc/releases/download/v${URUNC_VERSION}/containerd-shim-urunc-v2_static_${ARCH}"
+              chmod +x /host/usr/local/bin/containerd-shim-urunc-v2
+
+              echo "urunc installed: $(/host/usr/local/bin/urunc --version 2>&1)"
+          volumeMounts:
+            - name: host-usr-local
+              mountPath: /host/usr/local
           securityContext:
             privileged: true
-          volumeMounts:
-            - name: host
-              mountPath: /host
-            - name: containerd-config
-              mountPath: /etc/containerd
+      containers:
+        - name: label-node
+          image: bitnami/kubectl:latest
+          command:
+            - sh
+            - -c
+            - |
+              NODE=$(cat /etc/hostname)
+              kubectl label node "$NODE" urunc.io/urunc-runtime=true --overwrite
+              echo "Node $NODE labeled. Sleeping."
+              sleep infinity
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
       volumes:
-        - name: host
+        - name: host-usr-local
           hostPath:
-            path: /
-        - name: containerd-config
-          hostPath:
-            path: /etc/containerd
+            path: /usr/local

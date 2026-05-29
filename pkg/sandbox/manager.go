@@ -1,180 +1,144 @@
-// =============================================================================
-// FILE: pkg/sandbox/manager.go
-// SOURCE: https://urunc.io/design/ (Execution flow)
-// SOURCE: https://github.com/urunc-dev/urunc (containerd-shim integration)
+// pkg/sandbox/manager.go
 //
-// DOCS STATE:
-//   "containerd invokes urunc with the bundle and storage backend.
-//    urunc parses the bundle. urunc constructs the appropriate command-line
-//    parameters for the respective hypervisor and spawns the unikernel."
+// SandboxManager coordinates per-tool microVM sandbox creation and teardown.
 //
-// This is the ADVANCED path: using containerd Go client to create tasks
-// with the io.containerd.urunc.v2 runtime. This is how Kubernetes
-// integration works internally.
-// =============================================================================
-
+// Design: each AI agent tool call → isolated urunc microVM → destroyed on exit.
+// References:
+//   https://nubificus.co.uk/blog/urunc_agent/ (per-tool sandboxing concept)
+//   https://urunc.io/design/                  (container lifecycle)
+//   https://urunc.io/installation/            (runtime registration)
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"syscall"
+	"log"
+	"os/exec"
 	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/namespaces"
-	coci "github.com/containerd/containerd/oci"
-	uruncoci "github.com/example/ai-agent-sandbox/pkg/oci"
-	"github.com/example/ai-agent-sandbox/pkg/tool"
-	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/namansh70747/ai-agent-sandbox/pkg/tool"
 )
 
-// Manager uses containerd client to manage urunc sandboxes.
+// ExecResult holds the full outcome of one tool invocation inside a microVM.
+type ExecResult struct {
+	ToolName  string
+	ToolType  tool.ToolType
+	Command   []string
+	DockerCmd string        // auditable docker run line
+	Stdout    string
+	Stderr    string
+	ExitCode  int
+	Duration  time.Duration
+	Error     error
+}
+
+// Manager coordinates per-tool sandbox creation, execution, and teardown.
 type Manager struct {
-	client    *containerd.Client
-	namespace string
+	registry *tool.Registry
+	spawner  *Spawner
+	logger   *log.Logger
 }
 
-// NewManager connects to containerd.
-func NewManager(socketPath string) (*Manager, error) {
-	if socketPath == "" {
-		socketPath = "/run/containerd/containerd.sock"
-	}
-	client, err := containerd.New(socketPath)
-	if err != nil {
-		return nil, fmt.Errorf("connect to containerd: %w", err)
-	}
+// NewManager creates a Manager with workspaceDir bound to file_tool sandboxes.
+func NewManager(workspaceDir string, logger *log.Logger) *Manager {
 	return &Manager{
-		client:    client,
-		namespace: "ai-sandbox",
-	}, nil
+		registry: tool.NewRegistry(workspaceDir),
+		spawner:  NewSpawner(),
+		logger:   logger,
+	}
 }
 
-// Close closes the containerd client.
-func (m *Manager) Close() error {
-	return m.client.Close()
-}
-
-// CreateSandbox creates a container using the urunc runtime via containerd.
-func (m *Manager) CreateSandbox(ctx context.Context, t tool.Tool, id string) (containerd.Container, error) {
-	ctx = namespaces.WithNamespace(ctx, m.namespace)
-
-	// Prepare workspace mount
-	hostPath, guestPath, err := PrepareWorkspace(id)
+// Execute runs cmd inside a dedicated urunc microVM for the given toolType.
+//
+// Per-tool isolation:
+//   file_tool     → --network=none  + workspace mount
+//   code_tool     → --network=none  + no mounts  (strongest)
+//   web_tool      → bridge network  + no mounts
+//   database_tool → bridge network  + no mounts
+//
+// The microVM is created, used, and destroyed in one docker run --rm call.
+// Reference: https://urunc.io/quickstart/ (docker run --runtime io.containerd.urunc.v2)
+func (m *Manager) Execute(ctx context.Context, toolType tool.ToolType, cmd []string) (*ExecResult, error) {
+	def, err := m.registry.Get(toolType)
 	if err != nil {
 		return nil, err
 	}
-	_ = guestPath
 
-	// Build OCI spec with exact urunc annotations
-	annotations := uruncoci.ToolAnnotations(t.Name, t.Command)
+	dockerCmd := m.spawner.CommandString(def, cmd)
+	m.logger.Printf("[sandbox] spawning  tool=%-15s  isolation=%q", def.Name, def.Profile.Network)
+	m.logger.Printf("[sandbox] command:  %s", dockerCmd)
 
-	// Build mounts based on capabilities
-	var mounts []specs.Mount
-	if t.Cap.CanReadFS || t.Cap.CanWriteFS {
-		for _, p := range t.Cap.AllowedFSPaths {
-			// Map workspace host path to guest path
-			src := hostPath
-			dst := p
-			mounts = append(mounts, specs.Mount{
-				Destination: dst,
-				Source:      src,
-				Type:        "bind",
-				Options:     []string{"rbind", "rw"},
-			})
+	execCmd := m.spawner.BuildCommand(def, cmd)
+	// Attach context so the caller can cancel if needed
+	ctxCmd := exec.CommandContext(ctx, execCmd.Args[0], execCmd.Args[1:]...)
+
+	var stdout, stderr bytes.Buffer
+	ctxCmd.Stdout = &stdout
+	ctxCmd.Stderr = &stderr
+
+	start := time.Now()
+	runErr := ctxCmd.Run()
+	elapsed := time.Since(start)
+
+	exitCode := 0
+	if runErr != nil {
+		if ee, ok := runErr.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
 		}
 	}
 
-	// Memory limit: urunc passes this to QEMU via -m flag
-	memLimit := int64(1024 * 1024 * 1024) // 1GB
-
-	// Create OCI bundle on disk (urunc.json plus config.json)
-	bundle, err := uruncoci.NewToolBundle(id, hostPath, annotations, mounts, memLimit)
-	if err != nil {
-		return nil, fmt.Errorf("create OCI bundle: %w", err)
+	result := &ExecResult{
+		ToolName:  def.Name,
+		ToolType:  toolType,
+		Command:   cmd,
+		DockerCmd: dockerCmd,
+		Stdout:    stdout.String(),
+		Stderr:    stderr.String(),
+		ExitCode:  exitCode,
+		Duration:  elapsed,
+		Error:     runErr,
 	}
 
-	// Write a dummy rootfs if image not pulled; in production, use the pulled image ref.
-	// For this example, we assume the image is already built with bunny.
-	rootfsPath := bundle.RootFS
-
-	// Create container in containerd with urunc runtime
-	// The runtime name MUST match what is registered in containerd:
-	// io.containerd.urunc.v2
-	opts := []coci.SpecOpts{
-		coci.WithDefaultSpecForPlatform("linux/amd64"),
-		coci.WithRootFSPath(rootfsPath),
-		coci.WithAnnotations(annotations),
-		coci.WithMounts(mounts),
-		coci.WithMemoryLimit(memLimit),
-	}
-
-	container, err := m.client.NewContainer(
-		ctx,
-		id,
-		containerd.WithRuntime("io.containerd.urunc.v2", nil),
-		containerd.WithNewSpec(opts...),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("containerd create container: %w", err)
-	}
-
-	return container, nil
+	m.logger.Printf("[sandbox] finished  tool=%-15s  exit=%d  duration=%s",
+		def.Name, exitCode, elapsed.Round(time.Millisecond))
+	return result, nil
 }
 
-// Start starts the container task.
-func (m *Manager) Start(ctx context.Context, c containerd.Container) (containerd.Task, error) {
-	ctx = namespaces.WithNamespace(ctx, m.namespace)
+// PrintProfile prints the isolation profile for every registered tool.
+// No containers are started; this works without urunc installed.
+func (m *Manager) PrintProfile() {
+	fmt.Println("┌────────────────────────────────────────────────────────────────────┐")
+	fmt.Println("│  Per-Tool Isolation Profiles                                       │")
+	fmt.Println("│  Runtime: io.containerd.urunc.v2  (urunc microVM per tool call)    │")
+	fmt.Println("│  Source:  https://nubificus.co.uk/blog/urunc_agent/                │")
+	fmt.Println("└────────────────────────────────────────────────────────────────────┘")
+	fmt.Println()
 
-	// cio.NewCreator creates stdio pipes as documented in urunc execution flow
-	task, err := c.NewTask(ctx, cio.NewCreator(cio.WithStdio))
-	if err != nil {
-		return nil, fmt.Errorf("containerd new task: %w", err)
-	}
+	for _, tt := range []tool.ToolType{
+		tool.ToolTypeFile, tool.ToolTypeCode, tool.ToolTypeWeb, tool.ToolTypeDatabase,
+	} {
+		def, _ := m.registry.Get(tt)
+		p := def.Profile
 
-	if err := task.Start(ctx); err != nil {
-		return nil, fmt.Errorf("containerd task start: %w", err)
-	}
+		fmt.Printf("  ▶ %-16s\n", def.Name)
+		fmt.Printf("    Memory : %dMB   CPUs: %.1f\n", p.MemoryMB, p.CPUCount)
+		fmt.Printf("    Network: %s\n", p.Network)
 
-	return task, nil
-}
-
-// ExecIntoTask executes a process inside a running task.
-func (m *Manager) ExecIntoTask(ctx context.Context, task containerd.Task, execID string, args []string) error {
-	ctx = namespaces.WithNamespace(ctx, m.namespace)
-
-	processSpec := &specs.Process{
-		Args: args,
-		Env:  []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-		Cwd:  "/",
-	}
-
-	process, err := task.Exec(ctx, execID, processSpec, cio.NewCreator(cio.WithStdio))
-	if err != nil {
-		return fmt.Errorf("task exec: %w", err)
-	}
-
-	return process.Start(ctx)
-}
-
-// Stop stops and deletes a container and its task.
-func (m *Manager) Stop(ctx context.Context, c containerd.Container) error {
-	ctx = namespaces.WithNamespace(ctx, m.namespace)
-
-	task, err := c.Task(ctx, nil)
-	if err == nil && task != nil {
-		// Kill with SIGTERM then SIGKILL
-		_ = task.Kill(ctx, syscall.SIGTERM)
-		select {
-		case <-ctx.Done():
-			_ = task.Kill(ctx, syscall.SIGKILL)
-		case <-time.After(10 * time.Second):
-			_ = task.Kill(ctx, syscall.SIGKILL)
-		case <-task.Wait(ctx):
+		if len(p.Mounts) == 0 {
+			fmt.Printf("    Mounts : none  (host filesystem NOT exposed)\n")
+		} else {
+			for _, mv := range p.Mounts {
+				ro := ""
+				if mv.ReadOnly {
+					ro = " :ro"
+				}
+				fmt.Printf("    Mounts : %s → %s%s\n", mv.HostPath, mv.ContainerPath, ro)
+			}
 		}
-		_, _ = task.Delete(ctx, containerd.WithProcessKill)
-	}
 
-	return c.Delete(ctx, containerd.WithSnapshotCleanup)
+		fmt.Printf("    Why    : %s\n", p.Rationale)
+		fmt.Printf("    Docker : %s\n", m.spawner.CommandString(def, []string{"<cmd>"}))
+		fmt.Println()
+	}
 }

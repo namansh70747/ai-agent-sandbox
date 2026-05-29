@@ -1,176 +1,229 @@
-// =============================================================================
-// FILE: cmd/sandbox-manager/main.go
-// SOURCE: Aggregates all official docs into a working demo.
+// cmd/sandbox-manager/main.go
 //
-// This demonstrates:
-//   1. Tool Registry (PART 2 architecture)
-//   2. Basic Spawner using docker run --runtime io.containerd.urunc.v2
-//      (from https://nubificus.co.uk/blog/urunc_agent/)
-//   3. Advanced containerd client path (from https://urunc.io/design/)
-//   4. OCI bundle creation with urunc.json (from https://urunc.io/package/)
-//   5. Lifecycle: create, start, delete, kill (from https://urunc.io/design/)
-//   6. Network: tap0_urunc plus CNI (from https://urunc.io/design/)
-//   7. Storage: devmapper plus workspace mounts (from https://urunc.io/installation/)
-// =============================================================================
-
+// AI Agent Per-Tool Sandbox Manager — Demo Entry Point
+//
+// What this demonstrates
+// ──────────────────────
+// The original Nubificus blog (https://nubificus.co.uk/blog/urunc_agent/)
+// shows running an ENTIRE AI agent inside one urunc microVM.
+//
+// This project goes one step further: each TOOL the agent uses gets
+// its OWN microVM with a permission profile matched to what that tool
+// actually needs.  A file tool never gets network access.  A code
+// execution tool never sees the host filesystem.  A web tool gets
+// network but no mounts.
+//
+// The result is defence-in-depth:
+//   compromised tool → escape only that tool's microVM, nothing else.
+//
+// References used throughout:
+//   https://urunc.io/installation/
+//   https://urunc.io/quickstart/
+//   https://urunc.io/design/
+//   https://nubificus.co.uk/blog/urunc_agent/
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"strings"
-	"syscall"
+	"os/exec"
 	"time"
 
-	"github.com/example/ai-agent-sandbox/pkg/mcp"
-	"github.com/example/ai-agent-sandbox/pkg/sandbox"
-	"github.com/example/ai-agent-sandbox/pkg/tool"
+	"github.com/namansh70747/ai-agent-sandbox/pkg/sandbox"
+	"github.com/namansh70747/ai-agent-sandbox/pkg/tool"
 )
 
 func main() {
-	fmt.Println("=== AI Agent Per-Tool Sandboxing with urunc ===")
-	fmt.Println("Strictly following official docs:")
-	fmt.Println("  - https://urunc.io/design/")
-	fmt.Println("  - https://urunc.io/package/")
-	fmt.Println("  - https://urunc.io/installation/")
-	fmt.Println("  - https://urunc.io/quickstart/")
-	fmt.Println("  - https://nubificus.co.uk/blog/urunc_agent/")
+	workspaceDir := flag.String("workspace", "/tmp/ai-sandbox-workspace", "host directory mounted into file_tool sandboxes")
+	demoMode := flag.Bool("demo", false, "run live tool execution (requires urunc installed)")
+	profileOnly := flag.Bool("profile", false, "print isolation profiles and exit (no containers needed)")
+	verifyOnly := flag.Bool("verify", false, "run urunc quickstart verification and exit")
+	flag.Parse()
+
+	logger := log.New(os.Stdout, "", log.Ltime)
+	mgr := sandbox.NewManager(*workspaceDir, logger)
+
+	// ── Banner ───────────────────────────────────────────────────────────────
+	fmt.Println()
+	fmt.Println("  ╔═══════════════════════════════════════════════════════════════╗")
+	fmt.Println("  ║   Per-Tool AI Agent Sandboxing with urunc                    ║")
+	fmt.Println("  ║   Each tool → its own microVM → its own isolation profile    ║")
+	fmt.Println("  ║   Built on: https://urunc.io                                 ║")
+	fmt.Println("  ╚═══════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// -------------------------------------------------------------------------
-	// Step 1: Tool Registry
-	// -------------------------------------------------------------------------
-	registry := tool.NewRegistry()
-	fmt.Println("Registered tools:")
-	for name, t := range registry.List() {
-		fmt.Printf("  - %-15s %s\n", name, t.Description)
-	}
-	fmt.Println()
-
-	// -------------------------------------------------------------------------
-	// Step 2: Write CNI config (so tap0_urunc mapping works)
-	// SOURCE: https://urunc.io/design/ (Network handling)
-	// -------------------------------------------------------------------------
-	if err := sandbox.WriteCNIConfig(); err != nil {
-		log.Fatalf("Failed to write CNI config: %v", err)
-	}
-	fmt.Println("OK CNI bridge config written to /etc/cni/net.d/10-urunc-bridge.conf")
-
-	// -------------------------------------------------------------------------
-	// Step 3: Basic Spawner (Docker CLI path)
-	// SOURCE: https://nubificus.co.uk/blog/urunc_agent/
-	// -------------------------------------------------------------------------
-	basicSpawner := sandbox.NewBasicSpawner()
-
-	// -------------------------------------------------------------------------
-	// Step 4: Advanced Manager (containerd client path)
-	// SOURCE: https://urunc.io/design/ (Execution flow)
-	// -------------------------------------------------------------------------
-	var advancedMgr *sandbox.Manager
-	mgr, err := sandbox.NewManager("/run/containerd/containerd.sock")
-	if err != nil {
-		fmt.Printf("WARN containerd not available for advanced path: %v\n", err)
-		fmt.Println("  Falling back to Docker CLI path only.")
-	} else {
-		advancedMgr = mgr
-		defer advancedMgr.Close()
-		fmt.Println("OK Connected to containerd for advanced OCI lifecycle path")
+	// ── Profile-only mode ────────────────────────────────────────────────────
+	if *profileOnly {
+		mgr.PrintProfile()
+		return
 	}
 
-	// -------------------------------------------------------------------------
-	// Step 5: MCP Server
-	// -------------------------------------------------------------------------
-	server := mcp.NewServer(registry, basicSpawner, advancedMgr)
+	// ── Verify mode ──────────────────────────────────────────────────────────
+	if *verifyOnly {
+		runVerification()
+		return
+	}
 
-	// -------------------------------------------------------------------------
-	// Step 6: Demo execution via Basic Spawner
-	// -------------------------------------------------------------------------
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Always print profiles so reviewers can see the design
+	mgr.PrintProfile()
+
+	// ── Live demo mode ───────────────────────────────────────────────────────
+	if !*demoMode {
+		fmt.Println("  ℹ  Run with --demo to execute tools inside urunc microVMs.")
+		fmt.Println("     (requires urunc installed; see README.md for setup)")
+		fmt.Println()
+		return
+	}
+
+	// Ensure workspace directory exists
+	if err := os.MkdirAll(*workspaceDir, 0o755); err != nil {
+		logger.Fatalf("cannot create workspace dir %s: %v", *workspaceDir, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Trap signals for cleanup
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		cancel()
-	}()
+	fmt.Println("═══════════════════════════════════════════════════════════════════")
+	fmt.Println("  LIVE DEMO: Executing each tool inside its own urunc microVM")
+	fmt.Println("  Runtime: io.containerd.urunc.v2")
+	fmt.Println("  Source:  https://nubificus.co.uk/blog/urunc_agent/")
+	fmt.Println("═══════════════════════════════════════════════════════════════════")
+	fmt.Println()
 
-	// Demo: file_tool sandbox
-	fmt.Println("\n--- DEMO: file_tool sandbox ---")
-	fileTool, _ := registry.Get("file_tool")
-	sandboxID := fmt.Sprintf("file-tool-%d", time.Now().UnixNano())
-	wsHost, _, _ := sandbox.PrepareWorkspace(sandboxID)
+	// ── 1. urunc quickstart verification ─────────────────────────────────────
+	// Mirrors the quickstart example from https://urunc.io/quickstart/
+	fmt.Println("─── Step 1: urunc quickstart verification ───────────────────────")
+	fmt.Println("  Running: docker run --rm --runtime io.containerd.urunc.v2")
+	fmt.Println("           harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest")
+	fmt.Println()
 
-	// Spawn using docker run --runtime io.containerd.urunc.v2
-	// This is EXACTLY the command from the Nubificus blog.
-	containerID, err := basicSpawner.Spawn(ctx, fileTool, sandboxID, wsHost)
-	if err != nil {
-		log.Fatalf("Spawn failed: %v", err)
+	quickstartCmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-d",
+		"--runtime", "io.containerd.urunc.v2",
+		"harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest",
+	)
+	quickstartCmd.Stdout = os.Stdout
+	quickstartCmd.Stderr = os.Stderr
+	if err := quickstartCmd.Run(); err != nil {
+		fmt.Printf("  ✗ quickstart failed: %v\n", err)
+		fmt.Println("    Make sure urunc is installed: sudo bash scripts/00-install-prerequisites.sh")
+	} else {
+		fmt.Println("  ✓ urunc microVM started successfully (Nginx/Unikraft running)")
 	}
-	fmt.Printf("OK Spawned urunc container: %s\n", containerID)
+	fmt.Println()
 
-	// Execute a file write inside the sandbox
-	output, err := basicSpawner.Exec(ctx, containerID, []string{
-		"sh", "-c", "echo 'Hello from urunc sandbox' > /workspace/result.txt && cat /workspace/result.txt",
-	})
-	if err != nil {
-		log.Printf("Exec error: %v", err)
+	// ── 2. Per-tool demos ─────────────────────────────────────────────────────
+	demos := []struct {
+		toolType tool.ToolType
+		label    string
+		cmd      []string
+		desc     string
+	}{
+		{
+			toolType: tool.ToolTypeCode,
+			label:    "Step 2: code_tool — isolated code execution",
+			cmd:      []string{"echo", "hello from isolated code microVM"},
+			desc:     "No network. No host mounts. Strongest isolation.",
+		},
+		{
+			toolType: tool.ToolTypeFile,
+			label:    "Step 3: file_tool — workspace file access",
+			cmd:      []string{"ls", "/workspace"},
+			desc:     "No network. Workspace mounted read-write.",
+		},
+		{
+			toolType: tool.ToolTypeWeb,
+			label:    "Step 4: web_tool — network allowed, no mounts",
+			cmd:      []string{"curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "https://urunc.io"},
+			desc:     "Bridge network enabled. No filesystem exposure.",
+		},
 	}
-	fmt.Printf("OK Exec output: %s\n", strings.TrimSpace(output))
 
-	// Cleanup: destroy sandbox
-	if err := basicSpawner.Destroy(ctx, containerID); err != nil {
-		log.Printf("Destroy error: %v", err)
-	}
-	fmt.Println("OK Sandbox destroyed")
+	for _, d := range demos {
+		fmt.Printf("─── %s ───\n", d.label)
+		fmt.Printf("  Isolation: %s\n", d.desc)
 
-	// -------------------------------------------------------------------------
-	// Step 7: Demo via MCP Server
-	// -------------------------------------------------------------------------
-	fmt.Println("\n--- DEMO: MCP-style tool call ---")
-	resp := server.Execute(ctx, mcp.ToolRequest{
-		Tool:  "code_tool",
-		Input: "uname -a && echo 'Isolated code execution'",
-	})
-	if resp.Error != "" {
-		fmt.Printf("Error: %s\n", resp.Error)
-	}
-	fmt.Printf("Output: %s\n", resp.Output)
+		result, err := mgr.Execute(ctx, d.toolType, d.cmd)
+		if err != nil && result == nil {
+			fmt.Printf("  ✗ error: %v\n\n", err)
+			continue
+		}
 
-	// -------------------------------------------------------------------------
-	// Step 8: OCI Lifecycle direct demo (advanced)
-	// -------------------------------------------------------------------------
-	if advancedMgr != nil {
-		fmt.Println("\n--- DEMO: Advanced containerd client path ---")
-		codeTool, _ := registry.Get("code_tool")
-		advID := fmt.Sprintf("adv-code-%d", time.Now().UnixNano())
+		fmt.Printf("  Docker command: %s\n", result.DockerCmd)
+		fmt.Printf("  Duration: %s\n", result.Duration.Round(time.Millisecond))
 
-		c, err := advancedMgr.CreateSandbox(ctx, codeTool, advID)
-		if err != nil {
-			log.Printf("Advanced create failed: %v", err)
+		if result.ExitCode == 0 {
+			fmt.Printf("  ✓ exit 0\n")
+			if result.Stdout != "" {
+				fmt.Printf("  stdout: %s\n", result.Stdout)
+			}
 		} else {
-			task, err := advancedMgr.Start(ctx, c)
-			if err != nil {
-				log.Printf("Advanced start failed: %v", err)
-			} else {
-				fmt.Printf("OK Advanced task started: %s\n", task.ID())
-				time.Sleep(2 * time.Second)
+			fmt.Printf("  ✗ exit %d\n", result.ExitCode)
+			if result.Stderr != "" {
+				fmt.Printf("  stderr: %s\n", result.Stderr)
+			}
+			if result.Error != nil {
+				fmt.Printf("  error:  %v\n", result.Error)
+			}
+			fmt.Println("  NOTE: If image pull fails, check harbour.nbfc.io connectivity.")
+			fmt.Println("        The isolation profile is still applied regardless.")
+		}
+		fmt.Println()
+	}
 
-				// Stop and cleanup
-				if err := advancedMgr.Stop(ctx, c); err != nil {
-					log.Printf("Advanced stop failed: %v", err)
-				} else {
-					fmt.Println("OK Advanced sandbox stopped and deleted")
-				}
+	// ── Summary ───────────────────────────────────────────────────────────────
+	fmt.Println("═══════════════════════════════════════════════════════════════════")
+	fmt.Println("  SUMMARY: Per-Tool Isolation vs. Single-Agent Sandbox")
+	fmt.Println()
+	fmt.Println("  Original blog (whole agent in one sandbox):")
+	fmt.Println("    docker run --runtime io.containerd.urunc.v2 opencode:latest")
+	fmt.Println()
+	fmt.Println("  This project (per-tool micro-sandboxes):")
+	fmt.Println("    file_tool  → microVM: no network, workspace only")
+	fmt.Println("    code_tool  → microVM: no network, NO filesystem exposure")
+	fmt.Println("    web_tool   → microVM: network, NO filesystem exposure")
+	fmt.Println("    db_tool    → microVM: network to DB port, NO filesystem")
+	fmt.Println()
+	fmt.Println("  Result: one compromised tool cannot reach another tool's data.")
+	fmt.Println("  Each microVM is destroyed immediately after the tool returns.")
+	fmt.Println("═══════════════════════════════════════════════════════════════════")
+}
+
+// runVerification reproduces the quickstart test from https://urunc.io/quickstart/
+func runVerification() {
+	fmt.Println("── urunc Installation Verification ──────────────────────────────")
+	fmt.Println()
+
+	checks := []struct {
+		name string
+		cmd  []string
+	}{
+		{"docker daemon", []string{"docker", "info", "--format", "Server Version: {{.ServerVersion}}"}},
+		{"urunc binary", []string{"which", "urunc"}},
+		{"shim binary", []string{"which", "containerd-shim-urunc-v2"}},
+		{"urunc version", []string{"urunc", "--version"}},
+	}
+
+	allOK := true
+	for _, c := range checks {
+		out, err := exec.Command(c.cmd[0], c.cmd[1:]...).Output()
+		if err != nil {
+			fmt.Printf("  ✗ %-30s  MISSING (%v)\n", c.name, err)
+			allOK = false
+		} else {
+			fmt.Printf("  ✓ %-30s  %s", c.name, out)
+			if len(out) == 0 || out[len(out)-1] != '\n' {
+				fmt.Println()
 			}
 		}
 	}
 
-	fmt.Println("\n=== Demo Complete ===")
-	fmt.Println("Each tool executed in an isolated urunc microVM.")
-	fmt.Println("Host filesystem, kernel, and other processes are protected.")
+	fmt.Println()
+	if allOK {
+		fmt.Println("  ✓ All checks passed. Run with --demo to test per-tool sandboxing.")
+	} else {
+		fmt.Println("  ✗ Some checks failed. Follow README.md to complete installation.")
+	}
 }

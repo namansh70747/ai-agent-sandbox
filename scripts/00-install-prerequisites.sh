@@ -1,143 +1,338 @@
 #!/bin/bash
 # =============================================================================
-# FILE: scripts/00-install-prerequisites.sh
-# SOURCES:
-#   - https://urunc.io/installation/
-#   - https://urunc.io/quickstart/
-#   - https://nubificus.co.uk/blog/urunc_agent/
+# scripts/00-install-prerequisites.sh
+#
+# Installs every dependency needed to run urunc per-tool sandboxes.
+# All commands are sourced verbatim from official urunc documentation.
+#
+# SOURCES (in order of dependency):
+#   https://urunc.io/installation/   — primary reference
+#   https://urunc.io/quickstart/     — verification
+#   https://nubificus.co.uk/blog/urunc_agent/ — Docker/urunc workflow
+#
+# USAGE (run inside Lima VM or Ubuntu 22.04 host):
+#   sudo bash scripts/00-install-prerequisites.sh
+#
+# WHAT THIS SCRIPT INSTALLS:
+#   Part A — Docker (containerd + docker engine)
+#   Part B — runc (low-level runtime for normal containers in k8s)
+#   Part C — CNI plugins (container networking)
+#   Part D — nerdctl (docker-compatible CLI for containerd)
+#   Part E — devmapper thinpool snapshotter
+#   Part F — VM/Sandbox monitors (QEMU, Firecracker, Solo5, virtiofsd)
+#   Part G — urunc + containerd-shim-urunc-v2
+#   Part H — urunc configuration file
+#   Part I — containerd runtime registration
 # =============================================================================
 
 set -euo pipefail
 
-# -----------------------------------------------------------------------------
-# PART A: Common container tools (from https://urunc.io/installation/)
-# -----------------------------------------------------------------------------
+# ─── helpers ─────────────────────────────────────────────────────────────────
+log() { echo ""; echo "=== $* ==="; }
+ok()  { echo "  ✓ $*"; }
 
-echo "=== Installing containerd ==="
-sudo apt-get update
+# =============================================================================
+# PART A — Docker (provides both docker daemon + containerd)
+# Source: https://urunc.io/quickstart/ (Install Docker)
+#   "The easiest and fastest way to try out urunc would be with docker"
+# =============================================================================
+log "Part A: Installing Docker"
+
+sudo apt-get update -y
 sudo apt-get install -y ca-certificates curl gnupg lsb-release
 
-# Install runc (latest release)
-RUNC_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' "https://github.com/opencontainers/runc/releases/latest" | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
+curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+sudo sh /tmp/get-docker.sh
+rm /tmp/get-docker.sh
+
+sudo groupadd docker 2>/dev/null || true
+sudo usermod -aG docker "$USER" || true
+ok "Docker installed"
+
+# =============================================================================
+# PART B — runc (required for normal containers alongside urunc in k8s)
+# Source: https://urunc.io/installation/ (Install runc)
+#   "urunc delegates the management of normal containers to a typical
+#    low-level container runtime like runc"
+# =============================================================================
+log "Part B: Installing runc"
+
+RUNC_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' \
+  "https://github.com/opencontainers/runc/releases/latest" \
+  | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
+
 wget -q "https://github.com/opencontainers/runc/releases/download/v${RUNC_VERSION}/runc.$(dpkg --print-architecture)"
 sudo install -m 755 "runc.$(dpkg --print-architecture)" /usr/local/sbin/runc
 rm -f "./runc.$(dpkg --print-architecture)"
+ok "runc ${RUNC_VERSION} installed at /usr/local/sbin/runc"
 
-# Install containerd
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-rm get-docker.sh
-sudo groupadd docker || true
-sudo usermod -aG docker "$USER"
+# =============================================================================
+# PART C — CNI plugins
+# Source: https://urunc.io/installation/ (Install CNI plugins)
+#   "For container networking the CNI plugins are necessary."
+# urunc network design: https://urunc.io/design/ (Network handling)
+#   "urunc creates a tap device tap0_urunc and connects it via CNI veth"
+# =============================================================================
+log "Part C: Installing CNI plugins"
 
-# Install CNI plugins (required for urunc network handling with tap0_urunc)
-CNI_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' "https://github.com/containernetworking/plugins/releases/latest" | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
-wget -q "https://github.com/containernetworking/plugins/releases/download/${CNI_VERSION}/cni-plugins-linux-$(dpkg --print-architecture)${CNI_VERSION}.tgz"
+CNI_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' \
+  "https://github.com/containernetworking/plugins/releases/latest" \
+  | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
+
+CNI_ARCH=$(dpkg --print-architecture)
+wget -q "https://github.com/containernetworking/plugins/releases/download/v${CNI_VERSION}/cni-plugins-linux-${CNI_ARCH}-v${CNI_VERSION}.tgz"
 sudo mkdir -p /opt/cni/bin
-sudo tar Cxzvf /opt/cni/bin "cni-plugins-linux-$(dpkg --print-architecture)${CNI_VERSION}.tgz"
-rm -f "cni-plugins-linux-$(dpkg --print-architecture)${CNI_VERSION}.tgz"
+sudo tar Cxzvf /opt/cni/bin "cni-plugins-linux-${CNI_ARCH}-v${CNI_VERSION}.tgz" > /dev/null
+rm -f "cni-plugins-linux-${CNI_ARCH}-v${CNI_VERSION}.tgz"
+ok "CNI plugins ${CNI_VERSION} installed at /opt/cni/bin"
 
-# Install nerdctl
-NERDCTL_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' "https://github.com/containerd/nerdctl/releases/latest" | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
-wget -q "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-$(dpkg --print-architecture).tar.gz"
-sudo tar Cxzvf /usr/local/bin "nerdctl-${NERDCTL_VERSION}-linux-$(dpkg --print-architecture).tar.gz"
-rm -f "nerdctl-${NERDCTL_VERSION}-linux-$(dpkg --print-architecture).tar.gz"
+# Copy per-tool CNI bridge config
+sudo mkdir -p /etc/cni/net.d
+sudo cp configs/cni/10-urunc-bridge.conf /etc/cni/net.d/10-urunc-bridge.conf 2>/dev/null || true
+ok "CNI bridge config installed"
 
-# -----------------------------------------------------------------------------
-# PART B: Block-based snapshotter (devmapper) - from https://urunc.io/installation/
-# -----------------------------------------------------------------------------
-echo "=== Setting up devmapper snapshotter ==="
-sudo apt-get install -y bc thin-provisioning-tools
+# =============================================================================
+# PART D — nerdctl
+# Source: https://urunc.io/installation/ (Install nerdctl)
+#   "nerdctl offers a Docker-compatible CLI experience"
+# =============================================================================
+log "Part D: Installing nerdctl"
 
-git clone https://github.com/urunc-dev/urunc.git /tmp/urunc-src || true
+NERDCTL_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' \
+  "https://github.com/containerd/nerdctl/releases/latest" \
+  | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
+
+NERDCTL_ARCH=$(dpkg --print-architecture)
+wget -q "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-${NERDCTL_ARCH}.tar.gz"
+sudo tar Cxzvf /usr/local/bin "nerdctl-${NERDCTL_VERSION}-linux-${NERDCTL_ARCH}.tar.gz" > /dev/null
+rm -f "nerdctl-${NERDCTL_VERSION}-linux-${NERDCTL_ARCH}.tar.gz"
+ok "nerdctl ${NERDCTL_VERSION} installed"
+
+# =============================================================================
+# PART E — Devmapper thinpool snapshotter
+# Source: https://urunc.io/installation/ (Setting and configuring devmapper)
+#   "urunc can leverage block-based snapshots to treat a container's snapshot
+#    as a block device for a guest."
+#   "The first dm_create.sh creates a thinpool"
+# =============================================================================
+log "Part E: Setting up devmapper thinpool"
+
+sudo apt-get install -y bc thin-provisioning-tools dmsetup
+
+# Clone urunc to get the dm helper scripts
+git clone --depth 1 https://github.com/urunc-dev/urunc.git /tmp/urunc-src 2>/dev/null \
+  || (cd /tmp/urunc-src && git pull)
+
 sudo mkdir -p /usr/local/bin/scripts
-sudo mkdir -p /usr/local/lib/systemd/system/
-sudo cp /tmp/urunc-src/script/dm_create.sh /usr/local/bin/scripts/dm_create.sh
-sudo cp /tmp/urunc-src/script/dm_reload.sh /usr/local/bin/scripts/dm_reload.sh
+sudo mkdir -p /usr/local/lib/systemd/system
+
+sudo cp /tmp/urunc-src/script/dm_create.sh  /usr/local/bin/scripts/dm_create.sh
+sudo cp /tmp/urunc-src/script/dm_reload.sh  /usr/local/bin/scripts/dm_reload.sh
 sudo chmod 755 /usr/local/bin/scripts/dm_create.sh
 sudo chmod 755 /usr/local/bin/scripts/dm_reload.sh
 
+# Create the thinpool
 sudo /usr/local/bin/scripts/dm_create.sh
+ok "devmapper thinpool created"
 
+# Set up systemd service for reload-on-reboot
+# Source: https://urunc.io/installation/
+#   "on systemd-based systems, a service can automatically reload the thinpool"
 sudo cp /tmp/urunc-src/script/dm_reload.service /usr/local/lib/systemd/system/dm_reload.service
 sudo chmod 644 /usr/local/lib/systemd/system/dm_reload.service
 sudo chown root:root /usr/local/lib/systemd/system/dm_reload.service
 sudo systemctl daemon-reload
 sudo systemctl enable dm_reload.service
+ok "devmapper reload service enabled"
 
-# Configure containerd v2.x for devmapper (from installation docs)
+# Configure containerd for devmapper snapshotter
+# Source: https://urunc.io/installation/ (containerd v2.x)
+#   [plugins.'io.containerd.snapshotter.v1.devmapper']
 sudo mkdir -p /etc/containerd
-sudo tee /etc/containerd/config.toml > /dev/null <<'EOF'
+sudo tee /etc/containerd/config.toml > /dev/null << 'EOF'
 version = 2
-[plugins."io.containerd.snapshotter.v1.devmapper"]
-  pool_name = "containerd-pool"
-  root_path = "/var/lib/containerd/io.containerd.snapshotter.v1.devmapper"
+
+[plugins.'io.containerd.snapshotter.v1.devmapper']
+  pool_name       = "containerd-pool"
+  root_path       = "/var/lib/containerd/io.containerd.snapshotter.v1.devmapper"
   base_image_size = "10GB"
-  discard_blocks = true
-  fs_type = "ext2"
+  discard_blocks  = true
+  fs_type         = "ext2"
 EOF
 
 sudo systemctl restart containerd
 
-# -----------------------------------------------------------------------------
-# PART C: Install monitors (QEMU, Firecracker, Solo5, virtiofsd)
-# From: https://urunc.io/installation/ (Option 1: monitors-build repository)
-# -----------------------------------------------------------------------------
-echo "=== Installing VM and sandbox monitors ==="
+# Verify devmapper
+# Source: https://urunc.io/installation/
+#   "sudo ctr plugin ls | grep devmapper"  → should show "ok"
+DEVMAPPER_STATUS=$(sudo ctr plugin ls 2>/dev/null | grep devmapper | awk '{print $NF}' || echo "unknown")
+ok "devmapper snapshotter status: ${DEVMAPPER_STATUS}"
+
+# =============================================================================
+# PART F — VM and sandbox monitors (QEMU, Firecracker, Solo5, virtiofsd)
+# Source: https://urunc.io/installation/ (Option 1: monitors-build repository)
+#   "The monitor-builds repository provides a reference setup for building
+#    and distributing static binaries of monitors and tools for urunc."
+#
+# Release used:
+#   Firecracker v1.7.0  (note: "Unikraft has booting issues in newer versions")
+#   Solo5 v0.9.3
+#   virtiofsd v1.13.0
+#   QEMU v10.1.1
+# =============================================================================
+log "Part F: Installing VM/Sandbox monitors"
+
 MONITOR_RELEASE="FC-v1.7.0_S5-v0.9.3_VFS_-v1.13.0_QM-v10.1.1-9a44e"
-wget -q "https://github.com/urunc-dev/monitors-build/releases/download/${MONITOR_RELEASE}/release-amd64-${MONITOR_RELEASE}.tar.gz"
-sudo tar Cxzvf /opt "release-amd64-${MONITOR_RELEASE}.tar.gz"
-rm -f "release-amd64-${MONITOR_RELEASE}.tar.gz"
+MONITOR_ARCH="amd64"
 
-# -----------------------------------------------------------------------------
-# PART D: Install urunc and shim (from https://urunc.io/installation/)
-# -----------------------------------------------------------------------------
-echo "=== Installing urunc ==="
-URUNC_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' "https://github.com/urunc-dev/urunc/releases/latest" | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
+wget "https://github.com/urunc-dev/monitors-build/releases/download/${MONITOR_RELEASE}/release-${MONITOR_ARCH}-${MONITOR_RELEASE}.tar.gz"
+sudo tar Cxzvf /opt "release-${MONITOR_ARCH}-${MONITOR_RELEASE}.tar.gz" > /dev/null
+rm -f "release-${MONITOR_ARCH}-${MONITOR_RELEASE}.tar.gz"
+ok "Monitors installed at /opt/urunc/"
 
-URUNC_BINARY_FILENAME="urunc_static_$(dpkg --print-architecture)"
+# Verify key binaries
+for BIN in qemu-system-x86_64 firecracker solo5-hvt solo5-spt virtiofsd; do
+  if [ -f "/opt/urunc/bin/${BIN}" ]; then
+    ok "  /opt/urunc/bin/${BIN}"
+  else
+    echo "  ✗ MISSING: /opt/urunc/bin/${BIN}"
+  fi
+done
+
+# =============================================================================
+# PART G — urunc binary + containerd-shim-urunc-v2
+# Source: https://urunc.io/installation/ (Option 2: Install latest release)
+#   "URUNC_BINARY_FILENAME="urunc_static_$(dpkg --print-architecture)""
+# =============================================================================
+log "Part G: Installing urunc"
+
+URUNC_VERSION=$(curl -L -s -o /dev/null -w '%{url_effective}' \
+  "https://github.com/urunc-dev/urunc/releases/latest" \
+  | grep -oP "v\d+\.\d+\.\d+" | sed 's/v//')
+
+URUNC_ARCH=$(dpkg --print-architecture)
+
+# Install urunc binary
+URUNC_BINARY_FILENAME="urunc_static_${URUNC_ARCH}"
 wget -q "https://github.com/urunc-dev/urunc/releases/download/v${URUNC_VERSION}/${URUNC_BINARY_FILENAME}"
 chmod +x "${URUNC_BINARY_FILENAME}"
 sudo mv "${URUNC_BINARY_FILENAME}" /usr/local/bin/urunc
+ok "urunc ${URUNC_VERSION} → /usr/local/bin/urunc"
 
-CONTAINERD_BINARY_FILENAME="containerd-shim-urunc-v2_static_$(dpkg --print-architecture)"
-wget -q "https://github.com/urunc-dev/urunc/releases/download/v${URUNC_VERSION}/${CONTAINERD_BINARY_FILENAME}"
-chmod +x "${CONTAINERD_BINARY_FILENAME}"
-sudo mv "${CONTAINERD_BINARY_FILENAME}" /usr/local/bin/containerd-shim-urunc-v2
+# Install containerd shim
+SHIM_BINARY_FILENAME="containerd-shim-urunc-v2_static_${URUNC_ARCH}"
+wget -q "https://github.com/urunc-dev/urunc/releases/download/v${URUNC_VERSION}/${SHIM_BINARY_FILENAME}"
+chmod +x "${SHIM_BINARY_FILENAME}"
+sudo mv "${SHIM_BINARY_FILENAME}" /usr/local/bin/containerd-shim-urunc-v2
+ok "containerd-shim-urunc-v2 → /usr/local/bin/containerd-shim-urunc-v2"
 
-# -----------------------------------------------------------------------------
-# PART E: urunc configuration file (from https://urunc.io/installation/)
-# -----------------------------------------------------------------------------
-echo "=== Configuring urunc ==="
+# =============================================================================
+# PART H — urunc configuration file
+# Source: https://urunc.io/configuration/
+#   "urunc looks for its configuration file at /etc/urunc/config.toml"
+#   Monitor paths match the monitors-build release installed in Part F.
+# =============================================================================
+log "Part H: Writing urunc config"
+
 sudo mkdir -p /etc/urunc
-sudo tee /etc/urunc/config.toml > /dev/null <<'EOF'
+sudo tee /etc/urunc/config.toml > /dev/null << 'EOF'
+[log]
+level  = "info"
+syslog = false
+
+[timestamps]
+enabled     = false
+destination = "/var/log/urunc/timestamps.log"
+
 [monitors.qemu]
-path = "/opt/urunc/bin/qemu-system-x86_64"
-data_path = "/opt/urunc/share/qemu"
+default_memory_mb = 512
+default_vcpus     = 2
+path              = "/opt/urunc/bin/qemu-system-x86_64"
+data_path         = "/opt/urunc/share/qemu"
 
 [monitors.firecracker]
-path = "/opt/urunc/bin/firecracker"
+default_memory_mb = 256
+default_vcpus     = 1
+path              = "/opt/urunc/bin/firecracker"
 
 [monitors.hvt]
-path = "/opt/urunc/bin/solo5-hvt"
+default_memory_mb = 256
+default_vcpus     = 1
+path              = "/opt/urunc/bin/solo5-hvt"
 
 [monitors.spt]
-path = "/opt/urunc/bin/solo5-spt"
+default_memory_mb = 256
+default_vcpus     = 1
+path              = "/opt/urunc/bin/solo5-spt"
 
 [extra_binaries.virtiofsd]
-path = "/opt/urunc/bin/virtiofsd"
+path    = "/opt/urunc/bin/virtiofsd"
+options = "--cache always --sandbox none"
+EOF
+ok "urunc config written to /etc/urunc/config.toml"
+
+# =============================================================================
+# PART I — Register urunc as a Docker/containerd runtime
+# Source: https://urunc.io/installation/ (Add urunc runtime to containerd)
+#   containerd v2.x format:
+#   [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.urunc]
+#     runtime_type = "io.containerd.urunc.v2"
+# Also: https://nubificus.co.uk/blog/urunc_agent/
+#   "docker run --runtime io.containerd.urunc.v2"
+# =============================================================================
+log "Part I: Registering urunc runtime with containerd"
+
+sudo tee -a /etc/containerd/config.toml > /dev/null << 'EOF'
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.urunc]
+  runtime_type          = "io.containerd.urunc.v2"
+  container_annotations = ["com.urunc.unikernel.*"]
+  pod_annotations       = ["com.urunc.unikernel.*"]
+  snapshotter           = "devmapper"
 EOF
 
-# -----------------------------------------------------------------------------
-# PART F: Add urunc to containerd runtimes (from https://urunc.io/installation/)
-# -----------------------------------------------------------------------------
-sudo tee -a /etc/containerd/config.toml > /dev/null <<'EOF'
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.urunc]
-  runtime_type = "io.containerd.urunc.v2"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.urunc.options]
-  BinaryName = "/usr/local/bin/urunc"
+# Also register with Docker daemon config so `docker run --runtime` works
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json > /dev/null << 'EOF'
+{
+  "runtimes": {
+    "io.containerd.urunc.v2": {
+      "path": "/usr/local/bin/urunc"
+    }
+  }
+}
 EOF
 
 sudo systemctl restart containerd
+sudo systemctl restart docker 2>/dev/null || true
+ok "urunc runtime registered"
 
-echo "=== Installation complete. Log out and back in for docker group changes. ==="
+# =============================================================================
+# VERIFICATION
+# Source: https://urunc.io/quickstart/ (Run the unikernel)
+#   "docker run --rm -d --runtime io.containerd.urunc.v2
+#    harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest"
+# =============================================================================
+log "Verification"
+
+echo ""
+echo "  Checking installed binaries:"
+for BIN in docker urunc containerd-shim-urunc-v2 nerdctl; do
+  LOC=$(which "$BIN" 2>/dev/null || echo "NOT FOUND")
+  echo "    $BIN → $LOC"
+done
+
+echo ""
+echo "  urunc version: $(urunc --version 2>&1 || echo 'run urunc --version manually')"
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Installation complete!"
+echo ""
+echo "  IMPORTANT: Log out and back in for docker group membership."
+echo ""
+echo "  Next steps:"
+echo "    1. Verify: go run ./cmd/sandbox-manager/main.go --verify"
+echo "    2. Profile: go run ./cmd/sandbox-manager/main.go --profile"
+echo "    3. Demo:    go run ./cmd/sandbox-manager/main.go --demo"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

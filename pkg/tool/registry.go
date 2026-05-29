@@ -1,127 +1,198 @@
-// =============================================================================
-// FILE: pkg/tool/registry.go
-// SOURCE: Original architecture from user guide (PART 2)
-// IMPLEMENTATION: Custom permission model mapped to urunc capabilities.
+// pkg/tool/registry.go
 //
-// DESIGN CHOICE:
-//   We map each tool to a Linux-based urunc sandbox (framework: linux, monitor: qemu)
-//   because AI agent tools require general-purpose execution (shell, Python, HTTP).
-//   This follows the Nubificus blog approach:
-//   https://nubificus.co.uk/blog/urunc_agent/
-// =============================================================================
-
+// Defines every tool an AI agent can call, and the isolation profile each
+// tool must run inside when executed via urunc.
+//
+// Design reference: https://nubificus.co.uk/blog/urunc_agent/
+//   "urunc can be used in two ways: a) as a sandbox for the entire agent,
+//    or b) as a sandbox for specific application executions triggered by
+//    the agent."
+// This project implements approach (b): per-tool sandboxing.
+//
+// urunc annotations reference: https://urunc.io/package/
+// Network isolation reference: https://urunc.io/design/
 package tool
 
 import "fmt"
 
-// Capability defines what a tool is allowed to do.
-type Capability struct {
-	CanReadFS      bool
-	CanWriteFS     bool
-	CanExecute     bool
-	CanNetwork     bool
-	CanDatabase    bool
-	AllowedFSPaths []string // for example, ["/workspace"]
-	AllowedDomains []string // for example, ["api.github.com"]
-	AllowedPorts   []int    // for example, [5432, 3306]
+// ToolType is the logical class of operation an AI tool performs.
+type ToolType string
+
+const (
+	ToolTypeFile     ToolType = "file_tool"     // read / write workspace files
+	ToolTypeCode     ToolType = "code_tool"     // execute shell commands / scripts
+	ToolTypeWeb      ToolType = "web_tool"      // outbound HTTP requests
+	ToolTypeDatabase ToolType = "database_tool" // database queries
+)
+
+// NetworkMode controls what network access the sandbox receives.
+// References: https://urunc.io/design/ (Network handling section)
+type NetworkMode string
+
+const (
+	NetworkNone   NetworkMode = "none"   // --network=none  – no NIC attached
+	NetworkBridge NetworkMode = "bridge" // default Docker bridge via CNI
+)
+
+// MountSpec describes a single bind-mount for the sandbox.
+// References: https://nubificus.co.uk/blog/urunc_agent/ (Step 3: Sharing data)
+//   "docker run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
+//   "use with caution"
+type MountSpec struct {
+	HostPath      string // absolute path on the host / Lima guest
+	ContainerPath string // path inside the microVM
+	ReadOnly      bool   // true  → ro  (safe for workspace reads)
 }
 
-// Tool defines a sandboxed AI agent tool.
-type Tool struct {
-	Name        string
-	Description string
-	Cap         Capability
-	// ImageRef is the OCI image built with bunny for this tool.
-	ImageRef string
-	// Command is the default cmdline passed to urunit inside the VM.
-	Command string
+// EnvVar is a single environment variable passed into the sandbox.
+type EnvVar struct {
+	Key   string
+	Value string
 }
 
-// Registry holds all tool definitions.
+// IsolationProfile is the complete set of sandbox parameters for one tool.
+// Every field maps to a concrete docker/nerdctl flag or urunc annotation.
+type IsolationProfile struct {
+	// Container image to use.
+	// Pre-built urunc images: harbor.nbfc.io/nubificus/urunc/…
+	Image string
+
+	// Memory limit for the microVM (maps to docker -m / --memory).
+	MemoryMB int
+
+	// vCPU count (maps to docker --cpus).
+	CPUCount float64
+
+	// Network access level.
+	Network NetworkMode
+
+	// Bind mounts.  blog warning: "that data is no longer protected"
+	Mounts []MountSpec
+
+	// Extra environment variables forwarded into the VM.
+	Env []EnvVar
+
+	// Human-readable reason for each permission decision (for audit log).
+	Rationale string
+}
+
+// ToolDef combines the logical identity of a tool with its isolation profile.
+type ToolDef struct {
+	Name    string
+	Type    ToolType
+	Profile IsolationProfile
+}
+
+// Registry holds all registered tool definitions.
 type Registry struct {
-	tools map[string]Tool
+	tools map[ToolType]*ToolDef
 }
 
-// NewRegistry initializes the registry with least-privilege defaults.
-func NewRegistry() *Registry {
-	r := &Registry{tools: make(map[string]Tool)}
+// NewRegistry builds the default tool registry.
+// Every entry follows the principle of least privilege:
+// a tool gets only the access it strictly requires.
+func NewRegistry(workspaceDir string) *Registry {
+	r := &Registry{tools: make(map[ToolType]*ToolDef)}
 
-	r.tools["file_tool"] = Tool{
-		Name:        "file_tool",
-		Description: "Read and write files in workspace only",
-		Cap: Capability{
-			CanReadFS:      true,
-			CanWriteFS:     true,
-			CanExecute:     false,
-			CanNetwork:     false,
-			CanDatabase:    false,
-			AllowedFSPaths: []string{"/workspace"},
+	// ── file_tool ────────────────────────────────────────────────────────────
+	// Reads / writes files inside the workspace only.
+	// Network: none  – file operations need no network.
+	// Mount:   workspace read-write so the agent can persist results.
+	// Image:   pre-built Linux/QEMU urunc image (full shell available).
+	r.register(&ToolDef{
+		Name: "file_tool",
+		Type: ToolTypeFile,
+		Profile: IsolationProfile{
+			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			MemoryMB: 256,
+			CPUCount: 1,
+			Network:  NetworkNone,
+			Mounts: []MountSpec{
+				{HostPath: workspaceDir, ContainerPath: "/workspace", ReadOnly: false},
+			},
+			Rationale: "File I/O only; no network; workspace mount rw; no other paths accessible.",
 		},
-		ImageRef: "localhost/ai-sandbox/file-tool:latest",
-		Command:  "sleep infinity", // waits for exec requests
-	}
+	})
 
-	r.tools["code_tool"] = Tool{
-		Name:        "code_tool",
-		Description: "Execute shell commands and code",
-		Cap: Capability{
-			CanReadFS:      false,
-			CanWriteFS:     false,
-			CanExecute:     true,
-			CanNetwork:     false,
-			CanDatabase:    false,
-			AllowedFSPaths: []string{},
+	// ── code_tool ────────────────────────────────────────────────────────────
+	// Executes arbitrary shell commands / scripts.
+	// Network: none  – code execution should be air-gapped by default.
+	// Mount:   none  – do not expose host filesystem to arbitrary code.
+	r.register(&ToolDef{
+		Name: "code_tool",
+		Type: ToolTypeCode,
+		Profile: IsolationProfile{
+			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			MemoryMB: 512,
+			CPUCount: 2,
+			Network:  NetworkNone,
+			Mounts:   nil, // no filesystem exposure
+			Rationale: "Code execution; no network; no host filesystem mounts; " +
+				"strongest isolation profile because untrusted code runs here.",
 		},
-		ImageRef: "localhost/ai-sandbox/code-tool:latest",
-		Command:  "sleep infinity",
-	}
+	})
 
-	r.tools["web_tool"] = Tool{
-		Name:        "web_tool",
-		Description: "Make HTTP requests to specific domains",
-		Cap: Capability{
-			CanReadFS:      false,
-			CanWriteFS:     false,
-			CanExecute:     false,
-			CanNetwork:     true,
-			CanDatabase:    false,
-			AllowedDomains: []string{"api.github.com", "api.openai.com"},
-			AllowedPorts:   []int{443, 80},
+	// ── web_tool ─────────────────────────────────────────────────────────────
+	// Performs outbound HTTP/HTTPS requests.
+	// Network: bridge – must reach the internet.
+	// Mount:   none  – fetched data is returned as stdout only.
+	r.register(&ToolDef{
+		Name: "web_tool",
+		Type: ToolTypeWeb,
+		Profile: IsolationProfile{
+			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			MemoryMB: 256,
+			CPUCount: 1,
+			Network:  NetworkBridge,
+			Mounts:   nil,
+			Rationale: "HTTP requests only; bridge network enabled; " +
+				"no filesystem mounts to prevent data exfiltration via web.",
 		},
-		ImageRef: "localhost/ai-sandbox/web-tool:latest",
-		Command:  "sleep infinity",
-	}
+	})
 
-	r.tools["database_tool"] = Tool{
-		Name:        "database_tool",
-		Description: "Connect to database",
-		Cap: Capability{
-			CanReadFS:   false,
-			CanWriteFS:  false,
-			CanExecute:  false,
-			CanNetwork:  true,
-			CanDatabase: true,
-			AllowedPorts: []int{5432, 3306},
+	// ── database_tool ────────────────────────────────────────────────────────
+	// Runs SQL queries against a database endpoint.
+	// Network: bridge – needs to reach the database host.
+	// Mount:   none.
+	r.register(&ToolDef{
+		Name: "database_tool",
+		Type: ToolTypeDatabase,
+		Profile: IsolationProfile{
+			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			MemoryMB: 256,
+			CPUCount: 1,
+			Network:  NetworkBridge,
+			Mounts:   nil,
+			Env: []EnvVar{
+				{Key: "DB_HOST", Value: "localhost"},
+				{Key: "DB_PORT", Value: "5432"},
+			},
+			Rationale: "Database access; bridge network for DB connectivity; " +
+				"no filesystem mounts; env vars carry connection params only.",
 		},
-		ImageRef: "localhost/ai-sandbox/db-tool:latest",
-		Command:  "sleep infinity",
-	}
+	})
 
 	return r
 }
 
-func (r *Registry) Get(name string) (Tool, error) {
-	t, ok := r.tools[name]
+func (r *Registry) register(t *ToolDef) {
+	r.tools[t.Type] = t
+}
+
+// Get returns the ToolDef for the given type, or an error.
+func (r *Registry) Get(tt ToolType) (*ToolDef, error) {
+	t, ok := r.tools[tt]
 	if !ok {
-		return Tool{}, fmt.Errorf("tool %q not found", name)
+		return nil, fmt.Errorf("tool type %q not registered", tt)
 	}
 	return t, nil
 }
 
-func (r *Registry) List() map[string]Tool {
-	out := make(map[string]Tool, len(r.tools))
-	for k, v := range r.tools {
-		out[k] = v
+// All returns every registered tool definition.
+func (r *Registry) All() []*ToolDef {
+	out := make([]*ToolDef, 0, len(r.tools))
+	for _, t := range r.tools {
+		out = append(out, t)
 	}
 	return out
 }

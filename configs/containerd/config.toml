@@ -1,18 +1,43 @@
-# =============================================================================
-# FILE: configs/containerd/config.toml
-# SOURCE: https://urunc.io/installation/
-# =============================================================================
+# configs/containerd/config.toml
+#
+# containerd configuration for urunc per-tool sandboxing.
+#
+# Sources (used verbatim):
+#   https://urunc.io/installation/ — "Configure containerd"
+#   https://urunc.io/installation/ — "Setting and configuring devmapper"
+#   https://urunc.io/installation/ — "Add urunc runtime to containerd"
+#
+# Apply with:
+#   sudo cp configs/containerd/config.toml /etc/containerd/config.toml
+#   sudo systemctl restart containerd
+#
+# Verify devmapper snapshotter after restart:
+#   sudo ctr plugin ls | grep devmapper   ← should show "ok"
 
 version = 2
 
-[plugins."io.containerd.snapshotter.v1.devmapper"]
-  pool_name = "containerd-pool"
-  root_path = "/var/lib/containerd/io.containerd.snapshotter.v1.devmapper"
-  base_image_size = "10GB"
-  discard_blocks = true
-  fs_type = "ext2"
+# ── Devmapper snapshotter ──────────────────────────────────────────────────────
+# Required to mount container snapshots as block devices inside unikernels.
+# Source: https://urunc.io/installation/ (Setting and configuring devmapper)
+#
+# "urunc can leverage block-based snapshots to treat a container's snapshot
+#  as a block device for a guest."
+[plugins.'io.containerd.snapshotter.v1.devmapper']
+pool_name = "containerd-pool"
+root_path = "/var/lib/containerd/io.containerd.snapshotter.v1.devmapper"
+base_image_size = "10GB"
+discard_blocks = true
+fs_type = "ext2"
 
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.urunc]
-  runtime_type = "io.containerd.urunc.v2"
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.urunc.options]
-  BinaryName = "/usr/local/bin/urunc"
+# ── urunc runtime ──────────────────────────────────────────────────────────────
+# Registers urunc as a CRI runtime so Kubernetes and Docker can select it
+# with --runtime io.containerd.urunc.v2.
+# Source: https://urunc.io/installation/ (Add urunc runtime to containerd)
+#
+# "runtime_type = "io.containerd.urunc.v2""
+# "container_annotations = ["com.urunc.unikernel.*"]"
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.urunc]
+runtime_type = "io.containerd.urunc.v2"
+container_annotations = ["com.urunc.unikernel.*"]
+pod_annotations = ["com.urunc.unikernel.*"]
+snapshotter = "devmapper"

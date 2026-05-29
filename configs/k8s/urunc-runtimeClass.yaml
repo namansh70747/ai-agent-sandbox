@@ -1,9 +1,21 @@
-# =============================================================================
-# SOURCE: https://urunc.io/tutorials/How-to-urunc-on-k8s/
-# DOCS STATE: "First, we need to add urunc as a runtime class for the k8s cluster"
-# =============================================================================
-kind: RuntimeClass
+# configs/k8s/urunc-runtimeClass.yaml
+#
+# Kubernetes RuntimeClass that selects urunc as the container runtime.
+# Source: https://urunc.io/tutorials/How-to-urunc-on-k8s/
+#
+# Apply with:
+#   kubectl apply -f configs/k8s/urunc-runtimeClass.yaml
+#
+# After applying, reference in a Pod spec with:
+#   spec:
+#     runtimeClassName: urunc
 apiVersion: node.k8s.io/v1
+kind: RuntimeClass
 metadata:
   name: urunc
 handler: urunc
+scheduling:
+  nodeSelector:
+    # Only schedule on nodes that have the urunc runtime installed.
+    # The urunc-deploy DaemonSet labels nodes automatically.
+    urunc.io/urunc-runtime: "true"

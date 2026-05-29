@@ -1,20 +1,69 @@
-# =============================================================================
-# FILE: configs/urunc/config.toml
-# SOURCE: https://urunc.io/installation/
-# =============================================================================
+# configs/urunc/config.toml
+#
+# urunc configuration file.
+# Default location: /etc/urunc/config.toml
+#
+# Source: https://urunc.io/configuration/
+#
+# "urunc looks for its configuration file at /etc/urunc/config.toml.
+#  If the file doesn't exist or contains invalid configuration, urunc
+#  will use sensible defaults and continue to operate normally."
+#
+# Monitor binary paths match the monitors-build release used by the install script:
+#   FC-v1.7.0_S5-v0.9.3_VFS_-v1.13.0_QM-v10.1.1-9a44e
+# Source: https://urunc.io/installation/ (Option 1: Using the monitors-build repository)
+#
+# Apply with:
+#   sudo mkdir -p /etc/urunc
+#   sudo cp configs/urunc/config.toml /etc/urunc/config.toml
 
+# ── Logging ───────────────────────────────────────────────────────────────────
+# Source: https://urunc.io/configuration/ (Log Configuration)
+[log]
+level = "info"
+syslog = false
+
+# ── Timestamps (disabled by default) ─────────────────────────────────────────
+# Source: https://urunc.io/configuration/ (Timestamps Configuration)
+[timestamps]
+enabled = false
+destination = "/var/log/urunc/timestamps.log"
+
+# ── QEMU ──────────────────────────────────────────────────────────────────────
+# Source: https://urunc.io/configuration/ (Monitor Configuration)
+# path and data_path set to the monitors-build installation directory /opt/urunc/
 [monitors.qemu]
+default_memory_mb = 512
+default_vcpus = 2
 path = "/opt/urunc/bin/qemu-system-x86_64"
 data_path = "/opt/urunc/share/qemu"
 
+# ── Firecracker ───────────────────────────────────────────────────────────────
+# Source: https://urunc.io/hypervisor-support/ (AWS Firecracker)
+# "Note: Since only Unikraft can boot on top of Firecracker … we use v1.7.0"
 [monitors.firecracker]
+default_memory_mb = 256
+default_vcpus = 1
 path = "/opt/urunc/bin/firecracker"
 
+# ── Solo5-hvt ─────────────────────────────────────────────────────────────────
+# Source: https://urunc.io/hypervisor-support/ (Solo5-hvt)
 [monitors.hvt]
+default_memory_mb = 256
+default_vcpus = 1
 path = "/opt/urunc/bin/solo5-hvt"
 
+# ── Solo5-spt ─────────────────────────────────────────────────────────────────
+# Source: https://urunc.io/hypervisor-support/ (Solo5-spt)
 [monitors.spt]
+default_memory_mb = 256
+default_vcpus = 1
 path = "/opt/urunc/bin/solo5-spt"
 
+# ── virtiofsd ─────────────────────────────────────────────────────────────────
+# Source: https://urunc.io/configuration/ (Extra binaries Configuration)
+# "virtiofsd — vhost-user virtio-fs device backend written in Rust"
+# Used when web_tool or file_tool needs shared filesystem via virtiofs.
 [extra_binaries.virtiofsd]
 path = "/opt/urunc/bin/virtiofsd"
+options = "--cache always --sandbox none"

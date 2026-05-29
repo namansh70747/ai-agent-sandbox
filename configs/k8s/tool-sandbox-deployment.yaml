@@ -1,16 +1,22 @@
-# =============================================================================
-# SOURCE: https://urunc.io/tutorials/How-to-urunc-on-k8s/
-# SOURCE: https://urunc.io/design/ (k8s integration)
+# configs/k8s/tool-sandbox-deployment.yaml
 #
-# DOCS STATE: "urunc leverages runc to spawn generic containers.
-#              urunc then spawns the unikernel container inside the Pod netns."
-# =============================================================================
+# Example Kubernetes Deployment for the web_tool per-tool sandbox.
+# Each tool type runs as a separate Pod with runtimeClassName: urunc.
+#
+# Sources:
+#   https://urunc.io/tutorials/How-to-urunc-on-k8s/
+#   https://nubificus.co.uk/blog/urunc_agent/ (Step 2: Running the container)
+#
+# Apply with:
+#   kubectl apply -f configs/k8s/tool-sandbox-deployment.yaml
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ai-agent-web-tool
   labels:
     app: ai-agent-web-tool
+    tool-type: web_tool
 spec:
   replicas: 1
   selector:
@@ -20,35 +26,34 @@ spec:
     metadata:
       labels:
         app: ai-agent-web-tool
+        tool-type: web_tool
+      annotations:
+        # urunc OCI annotations (required)
+        # Source: https://urunc.io/package/ (Annotations)
+        com.urunc.unikernel.unikernelType: "linux"
+        com.urunc.unikernel.hypervisor: "qemu"
+        com.urunc.unikernel.binary: "/urunit"
+        com.urunc.unikernel.cmdline: ""
+        com.urunc.unikernel.mountRootfs: "true"
     spec:
+      # Use urunc runtime for this Pod
+      # Source: https://urunc.io/tutorials/How-to-urunc-on-k8s/
       runtimeClassName: urunc
+
       containers:
         - name: web-tool
-          image: localhost/ai-sandbox/web-tool:latest
-          imagePullPolicy: Always
+          image: harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest
           resources:
+            requests:
+              memory: "256Mi"
+              cpu: "500m"
             limits:
-              memory: "512Mi"
-          ports:
-            - containerPort: 8080
-              protocol: TCP
-          volumeMounts:
-            - name: workspace
-              mountPath: /workspace
-      restartPolicy: Always
-      volumes:
-        - name: workspace
-          emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ai-agent-web-tool
-spec:
-  ports:
-    - port: 8080
-      protocol: TCP
-      targetPort: 8080
-  selector:
-    app: ai-agent-web-tool
-  type: ClusterIP
+              memory: "256Mi"
+              cpu: "1"
+          # web_tool isolation profile:
+          #   - bridge network (for HTTP requests)
+          #   - no hostPath mounts
+          #   - no privileged access
+          securityContext:
+            privileged: false
+            readOnlyRootFilesystem: false

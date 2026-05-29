@@ -18,6 +18,11 @@ set -euo pipefail
 log() { echo ""; echo "=== $* ==="; }
 ok()  { echo "  ✓ $*"; }
 
+GO_BIN="/usr/local/go/bin/go"
+if [ ! -x "$GO_BIN" ]; then
+	GO_BIN="go"
+fi
+
 # =============================================================================
 # STEP 1 — Build per-tool image with bunny Containerfile syntax
 #
@@ -85,7 +90,7 @@ ok "Quickstart verification complete"
 # =============================================================================
 log "Step 3: Per-tool isolation profiles"
 
-/usr/local/go/bin/go run ./cmd/sandbox-manager/main.go --profile
+"$GO_BIN" run ./cmd/sandbox-manager/main.go --profile
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

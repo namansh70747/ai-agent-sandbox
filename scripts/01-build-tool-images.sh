@@ -85,7 +85,7 @@ ok "Quickstart verification complete"
 # =============================================================================
 log "Step 3: Per-tool isolation profiles"
 
-go run ./cmd/sandbox-manager/main.go --profile
+/usr/local/go/bin/go run ./cmd/sandbox-manager/main.go --profile
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

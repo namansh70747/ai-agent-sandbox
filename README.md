@@ -252,7 +252,7 @@ sudo nerdctl stop "$CONTAINER"
 
 ```
 cd ~/ai-agent-sandbox
-go run ./cmd/sandbox-manager/main.go --profile
+/usr/local/go/bin/go run ./cmd/sandbox-manager/main.go --profile
 ```
 
 Expected output:
@@ -284,13 +284,13 @@ Expected output:
 ### 5.2 Verify the installation
 
 ```
-sudo go run ./cmd/sandbox-manager/main.go --verify
+sudo /usr/local/go/bin/go run ./cmd/sandbox-manager/main.go --verify
 ```
 
 ### 5.3 Full live demo
 
 ```
-sudo go run ./cmd/sandbox-manager/main.go --demo
+sudo /usr/local/go/bin/go run ./cmd/sandbox-manager/main.go --demo
 ```
 
 This:
@@ -311,7 +311,7 @@ This:
 mkdir -p ~/myproject
 echo "hello from host" > ~/myproject/note.txt
 
-sudo go run ./cmd/sandbox-manager/main.go \
+sudo /usr/local/go/bin/go run ./cmd/sandbox-manager/main.go \
    --demo \
    --workspace ~/myproject
 ```

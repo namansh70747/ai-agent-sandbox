@@ -97,5 +97,5 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Images built and quickstart verified."
 echo ""
 echo "  Run the full demo with:"
-echo "    sudo go run ./cmd/sandbox-manager/main.go --demo"
+echo "    sudo /usr/local/go/bin/go run ./cmd/sandbox-manager/main.go --demo"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

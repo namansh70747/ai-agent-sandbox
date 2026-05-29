@@ -30,7 +30,7 @@ discard_blocks = true
 fs_type = "ext2"
 
 # ── urunc runtime ──────────────────────────────────────────────────────────────
-# Registers urunc as a CRI runtime so Kubernetes and Docker can select it
+# Registers urunc as a CRI runtime so Kubernetes and nerdctl can select it
 # with --runtime io.containerd.urunc.v2.
 # Source: https://urunc.io/installation/ (Add urunc runtime to containerd)
 #

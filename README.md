@@ -33,7 +33,7 @@ HTTP only, no data exfiltration path
 ❌ none
 DB port only, no filesystem
 
-A compromised `web_tool` cannot read the workspace. A compromised `code_tool` cannot reach the database. Each VM is created, used, and destroyed in a single `docker run --rm` call.
+A compromised `web_tool` cannot read the workspace. A compromised `code_tool` cannot reach the database. Each VM is created, used, and destroyed in a single `nerdctl run --rm` call.
 
 ---
 
@@ -48,7 +48,7 @@ AI Agent
     └─ calls db_tool    ──▶  urunc microVM D  (--network=bridge, no mounts)
 
 All VMs use runtime: io.containerd.urunc.v2
-All VMs are destroyed on return (docker run --rm)
+All VMs are destroyed on return (nerdctl run --rm)
 ```
 
 References:
@@ -111,7 +111,7 @@ What
 Doc Source
 
 A
-Docker (engine + containerd)
+containerd + nerdctl
 [quickstart](https://urunc.io/quickstart/)
 
 B
@@ -143,11 +143,11 @@ H
 [configuration](https://urunc.io/configuration/)
 
 I
-urunc registered as Docker/containerd runtime
+urunc registered as containerd runtime (nerdctl uses it)
 [installation](https://urunc.io/installation/)
 
 >
-> **Note:** Log out and back into the Lima shell after this step so the `docker` group membership takes effect:
+> **Note:** Log out and back into the Lima shell after this step so group membership changes take effect:
 >
 > ```
 > exit                         # leave Lima shell
@@ -223,8 +223,7 @@ This script:
 You can also run the quickstart directly as documented at [https://urunc.io/quickstart/](https://urunc.io/quickstart/):
 
 ```
-# From https://urunc.io/quickstart/ (A docker example)
-docker run --rm -d \
+sudo nerdctl run -d \
    --runtime io.containerd.urunc.v2 \
    harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest
 ```
@@ -232,8 +231,8 @@ docker run --rm -d \
 Get the container IP and curl it:
 
 ```
-CONTAINER=$(docker ps -lq)
-IP=$(docker inspect "$CONTAINER" --format '{{.NetworkSettings.IPAddress}}')
+CONTAINER=$(sudo nerdctl ps -lq)
+IP=$(sudo nerdctl inspect "$CONTAINER" --format '{{.NetworkSettings.IPAddress}}')
 echo "Nginx at http://$IP"
 curl "$IP"
 # ...Powered by Unikraft...
@@ -242,7 +241,7 @@ curl "$IP"
 Stop it:
 
 ```
-docker stop "$CONTAINER"
+sudo nerdctl stop "$CONTAINER"
 ```
 
 ---
@@ -270,7 +269,7 @@ Expected output:
       Network: none
       Mounts : /tmp/ai-sandbox-workspace → /workspace
       Why    : File I/O only; no network; workspace mount rw; ...
-      Docker : docker run --rm --runtime io.containerd.urunc.v2 \
+      nerdctl : nerdctl run --rm --runtime io.containerd.urunc.v2 \
                    -m256M --cpus=1.0 --network=none \
                    -v /tmp/ai-sandbox-workspace:/workspace \
                    harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest 
@@ -323,7 +322,7 @@ The `file_tool` microVM will see `note.txt` at `/workspace/note.txt`. The `code_
 
 ## Part 6 — nerdctl Examples
 
-urunc also integrates with nerdctl (Docker-compatible CLI for containerd directly). From the [quickstart docs](https://urunc.io/quickstart/):
+urunc also integrates with nerdctl (containerd CLI). From the [quickstart docs](https://urunc.io/quickstart/):
 
 ```
 # Redis on Rumprun over Solo5-hvt (from quickstart)
@@ -347,7 +346,7 @@ The [Nubificus blog post](https://nubificus.co.uk/blog/urunc_agent/) isolates th
 
 ```
 # Blog: one sandbox for the whole agent
-docker run --runtime io.containerd.urunc.v2 opencode:latest
+nerdctl run --runtime io.containerd.urunc.v2 opencode:latest
 ```
 
 This project isolates *individual tool calls*:
@@ -382,7 +381,7 @@ ai-agent-sandbox/
 │   │   └── registry.go          # Tool definitions + isolation profiles
 │   └── sandbox/
 │       ├── manager.go           # Orchestrates per-tool execution
-│       └── spawner.go           # Builds docker run commands
+│       └── spawner.go           # Builds nerdctl run commands
 ├── configs/
 │   ├── containerd/config.toml   # containerd v2 config (devmapper + urunc)
 │   ├── urunc/config.toml        # /etc/urunc/config.toml (monitor paths)
@@ -458,13 +457,13 @@ This project uses **Linux over QEMU** for maximum compatibility.
 
 ## Troubleshooting
 
-**`docker: Error response from daemon: Unknown runtime specified io.containerd.urunc.v2`**
+**`nerdctl: unknown runtime io.containerd.urunc.v2`**
 
-The urunc runtime is not registered with Docker. Check:
+The urunc runtime is not registered with containerd. Check:
 
 ```
-cat /etc/docker/daemon.json
-sudo systemctl restart docker
+grep -n "runtimes.urunc" /etc/containerd/config.toml
+sudo systemctl restart containerd
 ```
 
 **`devmapper status is not ok`**

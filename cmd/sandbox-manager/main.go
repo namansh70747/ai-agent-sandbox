@@ -96,11 +96,11 @@ func main() {
 	// ── 1. urunc quickstart verification ─────────────────────────────────────
 	// Mirrors the quickstart example from https://urunc.io/quickstart/
 	fmt.Println("─── Step 1: urunc quickstart verification ───────────────────────")
-	fmt.Println("  Running: docker run --rm --runtime io.containerd.urunc.v2")
+	fmt.Println("  Running: nerdctl run -d --runtime io.containerd.urunc.v2")
 	fmt.Println("           harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest")
 	fmt.Println()
 
-	quickstartCmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-d",
+	quickstartCmd := exec.CommandContext(ctx, "nerdctl", "run", "-d",
 		"--runtime", "io.containerd.urunc.v2",
 		"harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest",
 	)
@@ -151,7 +151,7 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("  Docker command: %s\n", result.DockerCmd)
+		fmt.Printf("  nerdctl command: %s\n", result.DockerCmd)
 		fmt.Printf("  Duration: %s\n", result.Duration.Round(time.Millisecond))
 
 		if result.ExitCode == 0 {
@@ -178,7 +178,7 @@ func main() {
 	fmt.Println("  SUMMARY: Per-Tool Isolation vs. Single-Agent Sandbox")
 	fmt.Println()
 	fmt.Println("  Original blog (whole agent in one sandbox):")
-	fmt.Println("    docker run --runtime io.containerd.urunc.v2 opencode:latest")
+	fmt.Println("    nerdctl run --runtime io.containerd.urunc.v2 opencode:latest")
 	fmt.Println()
 	fmt.Println("  This project (per-tool micro-sandboxes):")
 	fmt.Println("    file_tool  → microVM: no network, workspace only")
@@ -200,7 +200,7 @@ func runVerification() {
 		name string
 		cmd  []string
 	}{
-		{"docker daemon", []string{"docker", "info", "--format", "Server Version: {{.ServerVersion}}"}},
+		{"nerdctl info", []string{"nerdctl", "info"}},
 		{"urunc binary", []string{"which", "urunc"}},
 		{"shim binary", []string{"which", "containerd-shim-urunc-v2"}},
 		{"urunc version", []string{"urunc", "--version"}},

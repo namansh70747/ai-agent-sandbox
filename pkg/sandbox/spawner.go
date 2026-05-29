@@ -1,11 +1,11 @@
 // pkg/sandbox/spawner.go
 //
-// Translates an IsolationProfile into a concrete `docker run` invocation
+// Translates an IsolationProfile into a concrete `nerdctl run` invocation
 // that uses the urunc runtime.
 //
 // Every flag used here is sourced directly from:
 //   - https://urunc.io/quickstart/       (--runtime flag)
-//   - https://nubificus.co.uk/blog/urunc_agent/ (docker run workflow)
+//   - https://nubificus.co.uk/blog/urunc_agent/ (nerdctl run workflow)
 //   - https://urunc.io/installation/     (snapshotter)
 //
 // The runtime string "io.containerd.urunc.v2" is defined by the containerd
@@ -27,7 +27,7 @@ import (
 //     runtime_type = "io.containerd.urunc.v2"
 const uruncRuntime = "io.containerd.urunc.v2"
 
-// Spawner builds and executes docker commands that create urunc microVM sandboxes.
+// Spawner builds and executes nerdctl commands that create urunc microVM sandboxes.
 type Spawner struct{}
 
 // NewSpawner creates a Spawner.
@@ -58,11 +58,11 @@ func (s *Spawner) BuildCommand(def *tool.ToolDef, cmd []string) *exec.Cmd {
 	if def.Profile.Network == tool.NetworkNone {
 		args = append(args, "--network=none")
 	}
-	// NetworkBridge uses default docker bridge (CNI managed)
+	// NetworkBridge uses default bridge (CNI managed)
 
 	// Bind mounts
 	// Reference: https://nubificus.co.uk/blog/urunc_agent/ (Step 3)
-	//   "docker run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
+	//   "nerdctl run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
 	for _, m := range def.Profile.Mounts {
 		mountStr := fmt.Sprintf("%s:%s", m.HostPath, m.ContainerPath)
 		if m.ReadOnly {
@@ -80,25 +80,25 @@ func (s *Spawner) BuildCommand(def *tool.ToolDef, cmd []string) *exec.Cmd {
 	args = append(args, def.Profile.Image)
 	args = append(args, cmd...)
 
-	return exec.Command("docker", args...)
+	return exec.Command("nerdctl", args...)
 }
 
-// CommandString returns the full docker run command as a printable string.
+// CommandString returns the full nerdctl run command as a printable string.
 // Used for audit logging and demo output.
 func (s *Spawner) CommandString(def *tool.ToolDef, cmd []string) string {
 	c := s.BuildCommand(def, cmd)
 	return strings.Join(c.Args, " ")
 }
 
-// VerifyRuntimeAvailable checks that the docker daemon knows about urunc.
-// It runs `docker info` and looks for the runtime name.
+// VerifyRuntimeAvailable checks that nerdctl can see the urunc runtime.
+// It runs `nerdctl info` and looks for the runtime name.
 func VerifyRuntimeAvailable() error {
-	out, err := exec.Command("docker", "info", "--format",
+	out, err := exec.Command("nerdctl", "info", "--format",
 		"{{range .Runtimes}}{{.}}{{end}}").Output()
 	if err != nil {
-		return fmt.Errorf("docker info failed: %w", err)
+		return fmt.Errorf("nerdctl info failed: %w", err)
 	}
-	// docker info --format doesn't easily list runtime names, so just
+	// nerdctl info --format doesn't easily list runtime names, so just
 	// try running a trivial urunc container as the real check.
 	_ = out
 	return nil

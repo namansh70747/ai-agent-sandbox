@@ -6,7 +6,7 @@
 #
 # Sources:
 #   https://urunc.io/package/               — bunny build frontend
-#   https://urunc.io/quickstart/            — docker run with urunc
+#   https://urunc.io/quickstart/            — nerdctl run with urunc
 #   https://nubificus.co.uk/blog/urunc_agent/ — Containerfile + bunnyfile workflow
 #
 # USAGE (inside Lima VM, after 00-install-prerequisites.sh):
@@ -24,11 +24,11 @@ ok()  { echo "  ✓ $*"; }
 # Source: https://nubificus.co.uk/blog/urunc_agent/ (Bunny with Containerfile)
 #   "we simply need to prepend the following line in Containerfile:
 #    #syntax=harbor.nbfc.io/nubificus/bunny:containerfile"
-#   "docker build -f Containerfile -t go-dev-opencode:containerfile ."
+#   "nerdctl build -f Containerfile -t go-dev-opencode:containerfile ."
 # =============================================================================
 log "Step 1: Building base tool image with bunny"
 
-docker build \
+nerdctl build \
 	--no-cache \
 	-f build/Containerfile \
 	-t localhost/ai-sandbox/base-tool:latest \
@@ -38,35 +38,35 @@ ok "localhost/ai-sandbox/base-tool:latest built"
 
 # Tag per-tool variants
 for TOOL in file-tool code-tool web-tool db-tool; do
-	docker tag localhost/ai-sandbox/base-tool:latest "localhost/ai-sandbox/${TOOL}:latest"
+	nerdctl tag localhost/ai-sandbox/base-tool:latest "localhost/ai-sandbox/${TOOL}:latest"
 	ok "Tagged localhost/ai-sandbox/${TOOL}:latest"
 done
 
 echo ""
 echo "  Built images:"
-docker images | grep "ai-sandbox"
+nerdctl images | grep "ai-sandbox"
 
 # =============================================================================
 # STEP 2 — Quickstart verification
 #
 # Source: https://urunc.io/quickstart/ (Run the unikernel)
-#   "docker run --rm -d --runtime io.containerd.urunc.v2
+#   "nerdctl run -d --runtime io.containerd.urunc.v2
 #    harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest"
 # =============================================================================
 log "Step 2: Quickstart verification (Nginx/Unikraft over QEMU)"
 
 echo "  Pulling pre-built urunc image..."
-docker pull harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest
+nerdctl pull harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest
 
 echo ""
 echo "  Starting Nginx unikernel container with urunc..."
-CONTAINER_ID=$(docker run --rm -d \
+CONTAINER_ID=$(nerdctl run -d \
 	--runtime io.containerd.urunc.v2 \
 	harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest)
 
 sleep 3
 
-IP=$(docker inspect "$CONTAINER_ID" --format '{{.NetworkSettings.IPAddress}}' 2>/dev/null || echo "unknown")
+IP=$(nerdctl inspect "$CONTAINER_ID" --format '{{.NetworkSettings.IPAddress}}' 2>/dev/null || echo "unknown")
 echo "  Container: ${CONTAINER_ID:0:12}  IP: ${IP}"
 
 if [ "$IP" != "unknown" ] && [ -n "$IP" ]; then
@@ -77,7 +77,7 @@ fi
 
 echo ""
 echo "  Stopping container..."
-docker stop "$CONTAINER_ID" 2>/dev/null || true
+nerdctl stop "$CONTAINER_ID" 2>/dev/null || true
 ok "Quickstart verification complete"
 
 # =============================================================================

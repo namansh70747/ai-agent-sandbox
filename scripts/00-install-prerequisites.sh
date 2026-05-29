@@ -8,16 +8,16 @@
 # SOURCES (in order of dependency):
 #   https://urunc.io/installation/   — primary reference
 #   https://urunc.io/quickstart/     — verification
-#   https://nubificus.co.uk/blog/urunc_agent/ — Docker/urunc workflow
+#   https://nubificus.co.uk/blog/urunc_agent/ — nerdctl/urunc workflow
 #
 # USAGE (run inside Lima VM or Ubuntu 22.04 host):
 #   sudo bash scripts/00-install-prerequisites.sh
 #
 # WHAT THIS SCRIPT INSTALLS:
-#   Part A — Docker (containerd + docker engine)
+#   Part A — containerd (via Docker Engine install)
 #   Part B — runc (low-level runtime for normal containers in k8s)
 #   Part C — CNI plugins (container networking)
-#   Part D — nerdctl (docker-compatible CLI for containerd)
+#   Part D — nerdctl (containerd CLI)
 #   Part E — devmapper thinpool snapshotter
 #   Part F — VM/Sandbox monitors (QEMU, Firecracker, Solo5, virtiofsd)
 #   Part G — urunc + containerd-shim-urunc-v2
@@ -32,11 +32,11 @@ log() { echo ""; echo "=== $* ==="; }
 ok()  { echo "  ✓ $*"; }
 
 # =============================================================================
-# PART A — Docker (provides both docker daemon + containerd)
+# PART A — containerd (installed via Docker Engine)
 # Source: https://urunc.io/quickstart/ (Install Docker)
-#   "The easiest and fastest way to try out urunc would be with docker"
+#   "The easiest and fastest way to try out urunc would be with nerdctl"
 # =============================================================================
-log "Part A: Installing Docker"
+log "Part A: Installing containerd (via Docker Engine)"
 
 sudo apt-get update -y
 sudo apt-get install -y ca-certificates curl gnupg lsb-release
@@ -47,7 +47,7 @@ rm /tmp/get-docker.sh
 
 sudo groupadd docker 2>/dev/null || true
 sudo usermod -aG docker "$USER" || true
-ok "Docker installed"
+ok "Containerd installed (via Docker Engine)"
 
 # =============================================================================
 # PART B — runc (required for normal containers alongside urunc in k8s)
@@ -94,7 +94,7 @@ ok "CNI bridge config installed"
 # =============================================================================
 # PART D — nerdctl
 # Source: https://urunc.io/installation/ (Install nerdctl)
-#   "nerdctl offers a Docker-compatible CLI experience"
+#   "nerdctl offers a containerd CLI experience"
 # =============================================================================
 log "Part D: Installing nerdctl"
 
@@ -272,13 +272,13 @@ EOF
 ok "urunc config written to /etc/urunc/config.toml"
 
 # =============================================================================
-# PART I — Register urunc as a Docker/containerd runtime
+# PART I — Register urunc as a containerd runtime (used by nerdctl)
 # Source: https://urunc.io/installation/ (Add urunc runtime to containerd)
 #   containerd v2.x format:
 #   [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.urunc]
 #     runtime_type = "io.containerd.urunc.v2"
 # Also: https://nubificus.co.uk/blog/urunc_agent/
-#   "docker run --runtime io.containerd.urunc.v2"
+#   "nerdctl run --runtime io.containerd.urunc.v2"
 # =============================================================================
 log "Part I: Registering urunc runtime with containerd"
 
@@ -291,33 +291,20 @@ sudo tee -a /etc/containerd/config.toml > /dev/null << 'EOF'
   snapshotter           = "devmapper"
 EOF
 
-# Also register with Docker daemon config so `docker run --runtime` works
-sudo mkdir -p /etc/docker
-sudo tee /etc/docker/daemon.json > /dev/null << 'EOF'
-{
-  "runtimes": {
-    "io.containerd.urunc.v2": {
-      "path": "/usr/local/bin/urunc"
-    }
-  }
-}
-EOF
-
 sudo systemctl restart containerd
-sudo systemctl restart docker 2>/dev/null || true
-ok "urunc runtime registered"
+ok "urunc runtime registered for nerdctl"
 
 # =============================================================================
 # VERIFICATION
 # Source: https://urunc.io/quickstart/ (Run the unikernel)
-#   "docker run --rm -d --runtime io.containerd.urunc.v2
+#   "nerdctl run -d --runtime io.containerd.urunc.v2
 #    harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest"
 # =============================================================================
 log "Verification"
 
 echo ""
 echo "  Checking installed binaries:"
-for BIN in docker urunc containerd-shim-urunc-v2 nerdctl; do
+for BIN in nerdctl urunc containerd-shim-urunc-v2; do
   LOC=$(which "$BIN" 2>/dev/null || echo "NOT FOUND")
   echo "    $BIN → $LOC"
 done
@@ -329,7 +316,7 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Installation complete!"
 echo ""
-echo "  IMPORTANT: Log out and back in for docker group membership."
+echo "  IMPORTANT: Log out and back in so group membership changes take effect."
 echo ""
 echo "  Next steps:"
 echo "    1. Verify: go run ./cmd/sandbox-manager/main.go --verify"

@@ -31,12 +31,12 @@ type NetworkMode string
 
 const (
 	NetworkNone   NetworkMode = "none"   // --network=none  – no NIC attached
-	NetworkBridge NetworkMode = "bridge" // default Docker bridge via CNI
+	NetworkBridge NetworkMode = "bridge" // default bridge via CNI
 )
 
 // MountSpec describes a single bind-mount for the sandbox.
 // References: https://nubificus.co.uk/blog/urunc_agent/ (Step 3: Sharing data)
-//   "docker run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
+//   "nerdctl run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
 //   "use with caution"
 type MountSpec struct {
 	HostPath      string // absolute path on the host / Lima guest
@@ -51,16 +51,16 @@ type EnvVar struct {
 }
 
 // IsolationProfile is the complete set of sandbox parameters for one tool.
-// Every field maps to a concrete docker/nerdctl flag or urunc annotation.
+// Every field maps to a concrete nerdctl flag or urunc annotation.
 type IsolationProfile struct {
 	// Container image to use.
 	// Pre-built urunc images: harbor.nbfc.io/nubificus/urunc/…
 	Image string
 
-	// Memory limit for the microVM (maps to docker -m / --memory).
+	// Memory limit for the microVM (maps to nerdctl -m / --memory).
 	MemoryMB int
 
-	// vCPU count (maps to docker --cpus).
+	// vCPU count (maps to nerdctl --cpus).
 	CPUCount float64
 
 	// Network access level.

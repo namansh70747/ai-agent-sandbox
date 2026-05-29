@@ -25,7 +25,7 @@ type ExecResult struct {
 	ToolName  string
 	ToolType  tool.ToolType
 	Command   []string
-	DockerCmd string        // auditable docker run line
+	DockerCmd string        // auditable nerdctl run line
 	Stdout    string
 	Stderr    string
 	ExitCode  int
@@ -57,8 +57,8 @@ func NewManager(workspaceDir string, logger *log.Logger) *Manager {
 //   web_tool      → bridge network  + no mounts
 //   database_tool → bridge network  + no mounts
 //
-// The microVM is created, used, and destroyed in one docker run --rm call.
-// Reference: https://urunc.io/quickstart/ (docker run --runtime io.containerd.urunc.v2)
+// The microVM is created, used, and destroyed in one nerdctl run --rm call.
+// Reference: https://urunc.io/quickstart/ (nerdctl run --runtime io.containerd.urunc.v2)
 func (m *Manager) Execute(ctx context.Context, toolType tool.ToolType, cmd []string) (*ExecResult, error) {
 	def, err := m.registry.Get(toolType)
 	if err != nil {
@@ -138,7 +138,7 @@ func (m *Manager) PrintProfile() {
 		}
 
 		fmt.Printf("    Why    : %s\n", p.Rationale)
-		fmt.Printf("    Docker : %s\n", m.spawner.CommandString(def, []string{"<cmd>"}))
+		fmt.Printf("    nerdctl : %s\n", m.spawner.CommandString(def, []string{"<cmd>"}))
 		fmt.Println()
 	}
 }

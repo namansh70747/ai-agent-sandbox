@@ -1,0 +1,11 @@
+{
+  "mcp": {
+    "urunc-sandbox": {
+      "type": "local",
+      "command": ["/home/lima/ai-agent-sandbox/bin/mcp-server"],
+      "env": {
+        "SANDBOX_WORKSPACE": "/tmp/ai-sandbox-workspace"
+      }
+    }
+  }
+}

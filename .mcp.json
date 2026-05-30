@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "urunc-sandbox": {
+      "command": "./bin/mcp-server",
+      "env": {
+        "SANDBOX_WORKSPACE": "/tmp/ai-sandbox-workspace"
+      }
+    }
+  }
+}

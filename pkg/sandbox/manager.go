@@ -105,6 +105,37 @@ func (m *Manager) Execute(ctx context.Context, toolType tool.ToolType, cmd []str
 	return result, nil
 }
 
+// ProfileSummary returns all tool isolation profiles as JSON-friendly maps.
+// Used by the GET /api/v1/tools REST endpoint so any agent can discover
+// what sandboxing is applied to each tool before calling it.
+func (m *Manager) ProfileSummary() []map[string]any {
+	out := make([]map[string]any, 0, 4)
+	for _, tt := range []tool.ToolType{
+		tool.ToolTypeFile, tool.ToolTypeCode, tool.ToolTypeWeb, tool.ToolTypeDatabase,
+	} {
+		def, _ := m.registry.Get(tt)
+		p := def.Profile
+		mounts := make([]string, 0, len(p.Mounts))
+		for _, mv := range p.Mounts {
+			s := mv.HostPath + ":" + mv.ContainerPath
+			if mv.ReadOnly {
+				s += ":ro"
+			}
+			mounts = append(mounts, s)
+		}
+		out = append(out, map[string]any{
+			"name":      def.Name,
+			"type":      string(def.Type),
+			"memory_mb": p.MemoryMB,
+			"cpus":      p.CPUCount,
+			"network":   string(p.Network),
+			"mounts":    mounts,
+			"rationale": p.Rationale,
+		})
+	}
+	return out
+}
+
 // PrintProfile prints the isolation profile for every registered tool.
 // No containers are started; this works without urunc installed.
 func (m *Manager) PrintProfile() {

@@ -60,7 +60,12 @@ func add(s *server.MCPServer, mgr *sandbox.Manager, tt tool.ToolType, name, desc
 	capturedType := tt
 
 	s.AddTool(t, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		raw, ok := req.Params.Arguments["command"].([]any)
+		// req.Params.Arguments is typed as `any` in mcp-go v0.32; type-assert before indexing.
+		argsMap, ok := req.Params.Arguments.(map[string]any)
+		if !ok {
+			return mcp.NewToolResultError("invalid arguments: expected object"), nil
+		}
+		raw, ok := argsMap["command"].([]any)
 		if !ok || len(raw) == 0 {
 			return mcp.NewToolResultError("'command' must be a non-empty array of strings"), nil
 		}

@@ -103,7 +103,7 @@ func NewRegistry(workspaceDir string) *Registry {
 		Name: "file_tool",
 		Type: ToolTypeFile,
 		Profile: IsolationProfile{
-			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			Image:    "localhost/ai-sandbox/base-tool:latest",
 			MemoryMB: 256,
 			CPUCount: 1,
 			Network:  NetworkNone,
@@ -122,7 +122,7 @@ func NewRegistry(workspaceDir string) *Registry {
 		Name: "code_tool",
 		Type: ToolTypeCode,
 		Profile: IsolationProfile{
-			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			Image:    "localhost/ai-sandbox/base-tool:latest",
 			MemoryMB: 512,
 			CPUCount: 2,
 			Network:  NetworkNone,
@@ -140,7 +140,7 @@ func NewRegistry(workspaceDir string) *Registry {
 		Name: "web_tool",
 		Type: ToolTypeWeb,
 		Profile: IsolationProfile{
-			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			Image:    "localhost/ai-sandbox/base-tool:latest",
 			MemoryMB: 256,
 			CPUCount: 1,
 			Network:  NetworkBridge,
@@ -158,7 +158,7 @@ func NewRegistry(workspaceDir string) *Registry {
 		Name: "database_tool",
 		Type: ToolTypeDatabase,
 		Profile: IsolationProfile{
-			Image:    "harbor.nbfc.io/nubificus/urunc/nginx-qemu-linux-raw:latest",
+			Image:    "localhost/ai-sandbox/base-tool:latest",
 			MemoryMB: 256,
 			CPUCount: 1,
 			Network:  NetworkBridge,

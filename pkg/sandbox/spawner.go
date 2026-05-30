@@ -80,11 +80,12 @@ func (s *Spawner) BuildCommand(def *tool.ToolDef, cmd []string) *exec.Cmd {
 	args = append(args, def.Profile.Image)
 	args = append(args, cmd...)
 
-	return exec.Command("nerdctl", args...)
+	// nerdctl requires root for the urunc runtime. Use sudo so the MCP server
+	// and API server can call this without being started as root themselves.
+	return exec.Command("sudo", append([]string{"nerdctl"}, args...)...)
 }
 
-// CommandString returns the full nerdctl run command as a printable string.
-// Used for audit logging and demo output.
+// CommandString returns the full command as a printable string for audit logging.
 func (s *Spawner) CommandString(def *tool.ToolDef, cmd []string) string {
 	c := s.BuildCommand(def, cmd)
 	return strings.Join(c.Args, " ")

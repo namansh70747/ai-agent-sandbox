@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>urunc Per-Tool Sandbox — Dashboard</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#e6edf3; --mut:#8b949e;
+          --ok:#2fb41d; --no:#b42419; --acc:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:18px; }
+  .sub { color:var(--mut); font-size:12px; margin-top:4px; }
+  main { padding:24px; display:grid; gap:24px; max-width:1200px; margin:0 auto; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  h2 { margin:0 0 12px; font-size:14px; color:var(--acc); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; }
+  .yes { color:var(--ok); } .nope { color:var(--no); }
+  .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; border:1px solid var(--line); }
+  .run { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  select,input,button { background:#0d1117; color:var(--fg); border:1px solid var(--line);
+                        border-radius:6px; padding:7px 10px; font:inherit; }
+  input { flex:1; min-width:240px; }
+  button { background:var(--acc); color:#0d1117; border:none; cursor:pointer; font-weight:600; }
+  pre { background:#0d1117; border:1px solid var(--line); border-radius:6px; padding:12px;
+        overflow:auto; white-space:pre-wrap; margin:10px 0 0; max-height:280px; }
+  .muted { color:var(--mut); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+  @media(max-width:820px){ .grid2{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>urunc Per-Tool Sandbox — Live Dashboard</h1>
+  <div class="sub">One tool call → one urunc microVM → destroyed on return · runtime <code>io.containerd.urunc.v2</code></div>
+</header>
+
+<main>
+  <section>
+    <h2>Tool Capability Matrix</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">
+      What each tool CAN and CANNOT do — read straight from the active policy.
+      Egress allowlist is <b>declared, not enforced</b> (bridge = full egress).
+    </div>
+    <table id="tools"><thead><tr>
+      <th>tool</th><th>category</th><th>monitor</th><th>network</th>
+      <th>mounts</th><th>seccomp</th><th>ro-rootfs</th><th>timeout</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>Run a Tool</h2>
+      <div class="run">
+        <select id="tool"></select>
+        <input id="cmd" value='["echo","hello from microVM"]' />
+        <button onclick="run()">Execute</button>
+      </div>
+      <pre id="out" class="muted">result appears here…</pre>
+    </section>
+
+    <section>
+      <h2>Metrics</h2>
+      <pre id="metrics" class="muted">loading…</pre>
+    </section>
+  </div>
+</main>
+
+<script>
+async function loadTools() {
+  const r = await fetch('/api/v1/tools'); const tools = await r.json();
+  const tb = document.querySelector('#tools tbody'); tb.innerHTML = '';
+  const sel = document.getElementById('tool'); sel.innerHTML = '';
+  for (const t of tools) {
+    const net = t.network || 'none';
+    const mounts = (t.mounts && t.mounts.length) ? t.mounts.join('<br>') : '<span class="nope">none</span>';
+    const ro = t.read_only_rootfs ? '<span class="yes">yes</span>' : '<span class="muted">no</span>';
+    const netCell = net === 'none'
+      ? '<span class="nope">none</span>'
+      : '<span class="yes">'+net+'</span>';
+    tb.insertAdjacentHTML('beforeend',
+      `<tr><td><b>${t.name}</b></td><td>${t.category||''}</td>
+       <td>${t.monitor}</td><td>${netCell}</td><td>${mounts}</td>
+       <td>${t.seccomp}</td><td>${ro}</td><td>${t.timeout_seconds||'-'}s</td></tr>`);
+    const o = document.createElement('option'); o.value = t.type; o.textContent = t.name; sel.appendChild(o);
+  }
+}
+async function run() {
+  const out = document.getElementById('out');
+  out.className=''; out.textContent = 'running… (microVM cold boot ~ a few seconds)';
+  let cmd;
+  try { cmd = JSON.parse(document.getElementById('cmd').value); }
+  catch { out.textContent = 'command must be a JSON array, e.g. ["echo","hi"]'; return; }
+  const body = { tool_type: document.getElementById('tool').value, command: cmd };
+  try {
+    const r = await fetch('/api/v1/execute', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    out.textContent = JSON.stringify(await r.json(), null, 2);
+  } catch(e) { out.textContent = 'error: '+e; }
+  loadMetrics();
+}
+async function loadMetrics() {
+  const r = await fetch('/metrics'); const t = await r.text();
+  const m = document.getElementById('metrics'); m.className='';
+  m.textContent = t.trim() || 'no executions yet';
+}
+loadTools(); loadMetrics(); setInterval(loadMetrics, 4000);
+</script>
+</body>
+</html>

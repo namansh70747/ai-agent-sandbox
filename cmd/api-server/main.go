@@ -23,20 +23,28 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/namansh70747/ai-agent-sandbox/pkg/audit"
 	"github.com/namansh70747/ai-agent-sandbox/pkg/mcptools"
 	"github.com/namansh70747/ai-agent-sandbox/pkg/sandbox"
 	"github.com/namansh70747/ai-agent-sandbox/pkg/tool"
 )
+
+// dashboardHTML is the single-page observability dashboard served at GET /.
+//
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 // executeRequest is the body for POST /api/v1/execute.
 type executeRequest struct {
@@ -54,12 +62,15 @@ type executeResponse struct {
 	Stderr     string   `json:"stderr"`
 	ExitCode   int      `json:"exit_code"`
 	DurationMs int64    `json:"duration_ms"`
+	BootTimeMs int64    `json:"boot_time_ms,omitempty"`
 	Error      string   `json:"error,omitempty"`
 }
 
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	workspace := flag.String("workspace", "/tmp/ai-sandbox-workspace", "workspace dir for file_tool")
+	policyPath := flag.String("policy", "", "path to declarative policy YAML (e.g. configs/policies.yaml); empty uses built-in defaults")
+	auditPath := flag.String("audit", "audit.log", "path to the JSON audit log (one line per execution)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*workspace, 0o755); err != nil {
@@ -67,7 +78,14 @@ func main() {
 	}
 
 	logger := log.New(os.Stdout, "[api] ", log.Ltime)
-	mgr := sandbox.NewManager(*workspace, logger)
+	var mgr *sandbox.Manager
+	if *policyPath != "" {
+		mgr = sandbox.NewManagerFromPolicy(*policyPath, *workspace, logger)
+	} else {
+		mgr = sandbox.NewManager(*workspace, logger)
+	}
+
+	recorder := audit.NewRecorder(*auditPath)
 
 	// ── MCP server (shared between SSE transport and the REST path) ───────────
 	mcpSrv := server.NewMCPServer("urunc-sandbox", "1.0.0",
@@ -143,6 +161,32 @@ func main() {
 		if result.Error != nil {
 			resp.Error = result.Error.Error()
 		}
+		if result.BootTelemetry != nil && result.BootTelemetry.Attributed {
+			resp.BootTimeMs = result.BootTelemetry.BootTimeMs
+		}
+
+		// Audit + metrics: one structured record per execution.
+		entry := audit.Entry{
+			Time:       time.Now().Format(time.RFC3339),
+			Tool:       result.ToolName,
+			Type:       string(result.ToolType),
+			Command:    strings.Join(result.Command, " "),
+			ExitCode:   result.ExitCode,
+			DurationMs: result.Duration.Milliseconds(),
+			BootTimeMs: resp.BootTimeMs,
+		}
+		if def, derr := mgr.Registry().Get(tool.ToolType(req.ToolType)); derr == nil {
+			p := def.Profile
+			entry.Monitor = string(p.Monitor)
+			if entry.Monitor == "" {
+				entry.Monitor = "qemu"
+			}
+			entry.Network = string(p.Network)
+			entry.Seccomp = string(p.Seccomp)
+			entry.ReadOnly = p.ReadOnlyRootfs
+			entry.EgressDecl = len(p.EgressAllowlist) > 0
+		}
+		recorder.Record(entry)
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -150,31 +194,27 @@ func main() {
 		}
 	})
 
-	// Root: human-readable index so anyone hitting the server knows what's here
+	// Prometheus-style metrics (hand-rolled, no dependency).
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		fmt.Fprint(w, recorder.Prometheus())
+	})
+
+	// Root: the live observability dashboard (capability matrix, run form, metrics).
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w,
-			"urunc AI Agent Sandbox Platform\n"+
-				"Runtime: io.containerd.urunc.v2 (one microVM per tool call)\n\n"+
-				"REST (any AI agent):\n"+
-				"  GET  /api/v1/tools            isolation profiles for all 4 tools\n"+
-				"  POST /api/v1/execute          {\"tool_type\":\"...\",\"command\":[...]}\n\n"+
-				"MCP over SSE (remote MCP clients):\n"+
-				"  GET  /mcp/sse                 SSE event stream\n"+
-				"  POST /mcp/message             MCP message endpoint\n\n"+
-				"MCP over stdio (local agents):\n"+
-				"  run  ./bin/mcp-server         subprocess transport (OpenCode, Cursor, etc.)\n\n"+
-				"Source: https://nubificus.co.uk/blog/urunc_agent/\n",
-		)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(dashboardHTML)
 	})
 
 	logger.Printf("urunc sandbox platform listening on %s", *addr)
+	logger.Printf("  Dashboard:     http://localhost%s/", *addr)
 	logger.Printf("  REST tools:    http://localhost%s/api/v1/tools", *addr)
 	logger.Printf("  REST execute:  http://localhost%s/api/v1/execute", *addr)
+	logger.Printf("  Metrics:       http://localhost%s/metrics", *addr)
 	logger.Printf("  MCP SSE:       http://localhost%s/mcp/sse", *addr)
 
 	if err := http.ListenAndServe(*addr, mux); err != nil {

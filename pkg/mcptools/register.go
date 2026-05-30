@@ -20,29 +20,38 @@ import (
 	"github.com/namansh70747/ai-agent-sandbox/pkg/tool"
 )
 
-// RegisterAll registers all 4 sandboxed tools on s.
+// RegisterAll registers every tool in the manager's registry as an MCP tool.
+// Tools come from the declarative policy (or built-in defaults), so new tools
+// appear over MCP automatically with no code change here.
 // Input schema for every tool: {"command": ["cmd","arg1",...]}
 // Output: plain text with exit_code, stdout, stderr, and the nerdctl command used.
 func RegisterAll(s *server.MCPServer, mgr *sandbox.Manager) {
-	add(s, mgr, tool.ToolTypeFile, "file_tool",
-		"Run a command inside an isolated urunc microVM. "+
-			"No network access. Workspace directory mounted read-write at /workspace. "+
-			"Use this for file reads, writes, and inspection.")
+	for _, def := range mgr.Registry().All() {
+		add(s, mgr, def.Type, def.Name, describe(def))
+	}
+}
 
-	add(s, mgr, tool.ToolTypeCode, "code_tool",
-		"Run a command inside an isolated urunc microVM. "+
-			"No network access. No filesystem mounts. Strongest isolation. "+
-			"Use this for untrusted code execution.")
+// describe builds the MCP tool description from the policy fields, with a
+// concise isolation summary appended so the agent understands the sandbox.
+func describe(def *tool.ToolDef) string {
+	desc := def.Profile.Description
+	if desc == "" {
+		desc = def.Profile.Rationale
+	}
+	if desc == "" {
+		desc = "Run a command inside an isolated urunc microVM."
+	}
 
-	add(s, mgr, tool.ToolTypeWeb, "web_tool",
-		"Run a command inside an isolated urunc microVM. "+
-			"Outbound bridge network enabled. No filesystem mounts. "+
-			"Use this for HTTP/HTTPS requests.")
-
-	add(s, mgr, tool.ToolTypeDatabase, "database_tool",
-		"Run a command inside an isolated urunc microVM. "+
-			"Bridge network enabled. DB_HOST and DB_PORT injected as env vars. No filesystem mounts. "+
-			"Use this for database queries.")
+	p := def.Profile
+	net := string(p.Network)
+	if net == "" {
+		net = "none"
+	}
+	mounts := "no filesystem mounts"
+	if len(p.Mounts) > 0 {
+		mounts = fmt.Sprintf("%d mount(s)", len(p.Mounts))
+	}
+	return fmt.Sprintf("%s [isolation: network=%s, %s]", desc, net, mounts)
 }
 
 func add(s *server.MCPServer, mgr *sandbox.Manager, tt tool.ToolType, name, desc string) {
@@ -83,6 +92,9 @@ func add(s *server.MCPServer, mgr *sandbox.Manager, tt tool.ToolType, name, desc
 		fmt.Fprintf(&sb, "tool:         %s\n", result.ToolName)
 		fmt.Fprintf(&sb, "exit_code:    %d\n", result.ExitCode)
 		fmt.Fprintf(&sb, "duration_ms:  %d\n", result.Duration.Milliseconds())
+		if result.BootTelemetry != nil && result.BootTelemetry.Attributed {
+			fmt.Fprintf(&sb, "boot_time_ms: %d\n", result.BootTelemetry.BootTimeMs)
+		}
 		fmt.Fprintf(&sb, "nerdctl_cmd:  %s\n", result.DockerCmd)
 		if result.Stdout != "" {
 			fmt.Fprintf(&sb, "stdout:\n%s\n", strings.TrimRight(result.Stdout, "\n"))

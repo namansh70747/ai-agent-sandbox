@@ -8,8 +8,9 @@
 // never corrupt the JSON-RPC stream on stdout.
 //
 // Configuration via environment variables:
-//   SANDBOX_WORKSPACE   host directory mounted into file_tool microVMs
-//                       (default: /tmp/ai-sandbox-workspace)
+//
+//	SANDBOX_WORKSPACE   host directory mounted into file_tool microVMs
+//	                    (default: /tmp/ai-sandbox-workspace)
 //
 // Usage in OpenCode config (~/.config/opencode/config.json):
 //
@@ -48,7 +49,15 @@ func main() {
 
 	// Logger must write to stderr — stdout is owned by the MCP transport.
 	logger := log.New(os.Stderr, "[mcp] ", log.Ltime)
-	mgr := sandbox.NewManager(workspace, logger)
+
+	// SANDBOX_POLICY points at a declarative policy YAML. When set, tools come
+	// from it; otherwise the built-in 4-tool registry is used.
+	var mgr *sandbox.Manager
+	if policyPath := os.Getenv("SANDBOX_POLICY"); policyPath != "" {
+		mgr = sandbox.NewManagerFromPolicy(policyPath, workspace, logger)
+	} else {
+		mgr = sandbox.NewManager(workspace, logger)
+	}
 
 	s := server.NewMCPServer(
 		"urunc-sandbox",

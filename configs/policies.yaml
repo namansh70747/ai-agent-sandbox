@@ -1,0 +1,158 @@
+# =============================================================================
+# configs/policies.yaml
+#
+# Declarative per-tool isolation policy. Loaded by pkg/policy/loader.go into a
+# tool.Registry. Adding or tuning a tool is a YAML edit — no recompile.
+#
+# Each tool gets its own urunc microVM with ONLY the access it declares here.
+# ${WORKSPACE} is replaced with the --workspace value at load time.
+#
+# Enforcement honesty (see docs/URUNC.md):
+#   network none/bridge, monitor, seccomp, read_only_rootfs, mounts, limits,
+#   timeout, annotations  → genuinely enforced by urunc/nerdctl.
+#   egress_allowlist       → DECLARED ONLY. nerdctl/urunc cannot filter egress
+#                            per-destination today (bridge = full egress).
+#                            Surfaced in audit/metrics; needs a chained CNI
+#                            firewall plugin for real (CIDR-only) enforcement.
+# =============================================================================
+
+version: 1
+
+# Applied to every tool unless the tool overrides the field.
+defaults:
+  image: localhost/ai-sandbox/base-tool:latest
+  monitor: qemu
+  unikernel_type: linux
+  memory_mb: 256
+  cpus: 1
+  network: none
+  seccomp: default
+  read_only_rootfs: false
+  timeout_seconds: 120
+
+tools:
+  # ── Original four (migrated field-for-field from the Go registry) ──────────
+
+  - name: file_tool
+    type: file_tool
+    category: filesystem
+    network: none
+    mounts:
+      - "${WORKSPACE}:/workspace:rw"
+    description: "Read and write files in the workspace."
+    rationale: "File I/O only; no network; workspace mount rw; no other paths accessible."
+
+  - name: code_tool
+    type: code_tool
+    category: compute
+    memory_mb: 512
+    cpus: 2
+    network: none
+    seccomp: configs/seccomp/strict.json   # hardens the host-side QEMU monitor
+    read_only_rootfs: true                  # untrusted code gets an immutable rootfs
+    timeout_seconds: 60
+    description: "Execute untrusted shell commands and scripts."
+    rationale: "Code execution; no network; no host filesystem mounts; read-only rootfs; strict seccomp on the monitor. Strongest profile because untrusted code runs here."
+
+  - name: web_tool
+    type: web_tool
+    category: network
+    network: bridge
+    timeout_seconds: 30
+    egress_allowlist:        # DECLARED ONLY — not enforced (see header note)
+      - "0.0.0.0/0"
+    description: "Make outbound HTTP/HTTPS requests."
+    rationale: "HTTP requests only; bridge network enabled; no filesystem mounts to prevent data exfiltration via web."
+
+  - name: database_tool
+    type: database_tool
+    category: network
+    network: bridge
+    timeout_seconds: 45
+    env:
+      DB_HOST: "localhost"
+      DB_PORT: "5432"
+    description: "Run SQL queries against a database endpoint."
+    rationale: "Database access; bridge network for DB connectivity; no filesystem mounts; env vars carry connection params only."
+
+  # ── New tools (Phase 1) — all Linux/QEMU, backed by base-tool packages ─────
+
+  - name: git_tool
+    type: git_tool
+    category: vcs
+    network: bridge
+    mounts:
+      - "${WORKSPACE}:/workspace:rw"
+    timeout_seconds: 60
+    description: "Run git operations (clone, log, diff) against the workspace."
+    rationale: "Git needs network for clone/fetch and workspace rw to operate on the repo; no other host paths."
+
+  - name: python_tool
+    type: python_tool
+    category: compute
+    memory_mb: 512
+    cpus: 2
+    network: none
+    mounts:
+      - "${WORKSPACE}:/workspace:rw"
+    timeout_seconds: 90
+    description: "Run Python scripts against the workspace."
+    rationale: "Scripted compute on workspace files; no network so packages cannot phone home; workspace rw for inputs/outputs."
+
+  - name: shell_tool
+    type: shell_tool
+    category: compute
+    network: none
+    mounts:
+      - "${WORKSPACE}:/workspace:ro"
+    timeout_seconds: 30
+    description: "Run read-only shell inspection over the workspace."
+    rationale: "Inspection only; no network; workspace mounted READ-ONLY so it cannot mutate state."
+
+  - name: json_tool
+    type: json_tool
+    category: data
+    network: none
+    mounts:
+      - "${WORKSPACE}:/workspace:ro"
+    timeout_seconds: 30
+    description: "Transform/query JSON with jq over workspace files."
+    rationale: "Pure data transformation; no network; read-only workspace; backed by jq."
+
+  - name: pdf_tool
+    type: pdf_tool
+    category: data
+    network: none
+    mounts:
+      - "${WORKSPACE}:/workspace:rw"
+    timeout_seconds: 60
+    description: "Extract text/metadata from PDFs (pdftotext, pdfinfo)."
+    rationale: "Document parsing of untrusted PDFs; no network so a malicious PDF cannot exfiltrate; workspace rw for extracted output."
+
+  - name: image_tool
+    type: image_tool
+    category: data
+    memory_mb: 512
+    network: none
+    mounts:
+      - "${WORKSPACE}:/workspace:rw"
+    timeout_seconds: 60
+    description: "Inspect/convert images (ImageMagick identify, convert)."
+    rationale: "Image processing of untrusted files; no network; workspace rw; higher memory for large rasters."
+
+  # ── Unikernel showcase (Phase 2) ───────────────────────────────────────────
+  # Demonstrates running a REAL unikernel (not a Linux container-VM) — the core
+  # urunc value proposition. Uses a public prebuilt Unikraft nginx image; its
+  # hypervisor/cmdline are baked by bunny, so we do NOT override annotations.
+  - name: nginx_showcase
+    type: nginx_showcase          # distinct type so it doesn't collide with web_tool
+    category: showcase
+    image: harbor.nbfc.io/nubificus/urunc/nginx-qemu-unikraft-initrd:latest
+    monitor: qemu
+    unikernel_type: unikraft
+    network: bridge
+    memory_mb: 128
+    cpus: 1
+    timeout_seconds: 20
+    description: "Prebuilt Unikraft nginx unikernel over QEMU."
+    rationale: "Showcases a true unikernel (Unikraft) vs Linux microVM; tiny footprint, fast boot; annotations baked by bunny so not overridden."

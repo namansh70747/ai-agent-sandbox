@@ -23,10 +23,13 @@
 level = "info"
 syslog = false
 
-# ── Timestamps (disabled by default) ─────────────────────────────────────────
+# ── Timestamps (boot-time telemetry) ─────────────────────────────────────────
 # Source: https://urunc.io/configuration/ (Timestamps Configuration)
+# Enabled so the platform can attribute per-tool VM boot timing (surfaced in
+# the API/MCP responses and the dashboard). All VMs append to one log, so the
+# manager serialises telemetry attribution — see pkg/sandbox/telemetry.go.
 [timestamps]
-enabled = false
+enabled = true
 destination = "/var/log/urunc/timestamps.log"
 
 # ── QEMU ──────────────────────────────────────────────────────────────────────

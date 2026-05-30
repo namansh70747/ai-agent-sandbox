@@ -1,6 +1,12 @@
 # Per-Tool AI Agent Sandboxing with urunc
 
+![CI](https://github.com/namansh70747/ai-agent-sandbox/actions/workflows/ci.yml/badge.svg)
+
 > **One tool call → one isolated microVM → destroyed after return.**
+
+**Tools are declared in [`configs/policies.yaml`](configs/policies.yaml), not hardcoded.** Each tool gets its own urunc microVM with a permission profile — monitor, network, mounts, seccomp, read-only rootfs, timeout — matched to exactly what it needs. Add or tune a tool by editing YAML; it appears over MCP, REST, and the CLI automatically. Deep design rationale lives in [`docs/URUNC.md`](docs/URUNC.md) and [`docs/adr/`](docs/adr/).
+
+**Honesty first:** the platform claims only what urunc/nerdctl actually enforce. `egress_allowlist` is *declared but not enforced* (bridge = full egress) and seccomp hardens the *host-side monitor*, not the guest — both documented plainly in [`docs/URUNC.md`](docs/URUNC.md) §7–8.
 
 The [Nubificus blog](https://nubificus.co.uk/blog/urunc_agent/) shows running an entire AI agent inside one [urunc](https://urunc.io/) microVM. This project goes further: **each tool call your agent makes gets its own microVM**, with a permission profile matched exactly to what that tool needs — and nothing more.
 

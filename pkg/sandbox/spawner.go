@@ -23,8 +23,9 @@ import (
 
 // uruncRuntime is the containerd runtime identifier for urunc.
 // Source: https://urunc.io/quickstart/ and https://urunc.io/installation/
-//   [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.urunc]
-//     runtime_type = "io.containerd.urunc.v2"
+//
+//	[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.urunc]
+//	  runtime_type = "io.containerd.urunc.v2"
 const uruncRuntime = "io.containerd.urunc.v2"
 
 // Spawner builds and executes nerdctl commands that create urunc microVM sandboxes.
@@ -38,13 +39,14 @@ func NewSpawner() *Spawner { return &Spawner{} }
 // The command is NOT started; callers use cmd.Run() / cmd.Output().
 //
 // Flag mapping:
-//   --runtime io.containerd.urunc.v2   → urunc shim (not runc)
-//   --rm                               → destroy microVM after exit
-//   -m <N>M                            → VM memory limit
-//   --cpus <N>                         → vCPU count
-//   --network none|bridge              → network isolation
-//   -v host:container[:ro]             → bind mounts (blog: "use with caution")
-//   -e KEY=VAL                         → environment variables
+//
+//	--runtime io.containerd.urunc.v2   → urunc shim (not runc)
+//	--rm                               → destroy microVM after exit
+//	-m <N>M                            → VM memory limit
+//	--cpus <N>                         → vCPU count
+//	--network none|bridge              → network isolation
+//	-v host:container[:ro]             → bind mounts (blog: "use with caution")
+//	-e KEY=VAL                         → environment variables
 func (s *Spawner) BuildCommand(def *tool.ToolDef, cmd []string) *exec.Cmd {
 	args := []string{
 		"run", "--rm",
@@ -75,6 +77,42 @@ func (s *Spawner) BuildCommand(def *tool.ToolDef, cmd []string) *exec.Cmd {
 	for _, e := range def.Profile.Env {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", e.Key, e.Value))
 	}
+
+	// ── Extended isolation dimensions ────────────────────────────────────────
+
+	// Monitor (hypervisor) override via urunc annotation. Only override for
+	// Linux unikernels — prebuilt unikraft/rumprun images bake their own
+	// hypervisor and must not be overridden.
+	// Reference: https://urunc.io/package/ (com.urunc.unikernel.hypervisor)
+	if def.Profile.Monitor != "" &&
+		(def.Profile.UnikernelType == "" || def.Profile.UnikernelType == tool.UnikernelLinux) {
+		args = append(args, "--annotation",
+			"com.urunc.unikernel.hypervisor="+string(def.Profile.Monitor))
+	}
+
+	// Arbitrary urunc annotations (com.urunc.unikernel.*), e.g. cmdline.
+	for k, v := range def.Profile.Annotations {
+		args = append(args, "--annotation", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Seccomp profile. "" / "default" → nerdctl default (emit nothing).
+	switch def.Profile.Seccomp {
+	case "", "default":
+		// default profile, no flag
+	case "unconfined":
+		args = append(args, "--security-opt", "seccomp=unconfined")
+	default: // path to a custom profile JSON
+		args = append(args, "--security-opt", "seccomp="+string(def.Profile.Seccomp))
+	}
+
+	// Read-only rootfs (immutable guest).
+	if def.Profile.ReadOnlyRootfs {
+		args = append(args, "--read-only")
+	}
+
+	// NOTE: EgressAllowlist is intentionally NOT applied here. nerdctl/urunc
+	// cannot enforce per-destination egress today (bridge = full egress); it is
+	// declared policy only, surfaced in audit/metrics and logged by the manager.
 
 	// Image and command
 	args = append(args, def.Profile.Image)

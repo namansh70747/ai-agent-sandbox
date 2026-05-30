@@ -14,7 +14,12 @@
 # Base image: lightweight Alpine with common tools
 FROM alpine:3.19
 
-RUN apk add --no-cache bash curl python3 py3-pip git
+# Tool runtimes. Each package backs one or more policy tools:
+#   bash/curl/python3/git → shell_tool, web_tool, python_tool, git_tool
+#   jq                     → json_tool
+#   poppler-utils          → pdf_tool   (pdftotext, pdfinfo)
+#   imagemagick            → image_tool (identify, convert)
+RUN apk add --no-cache bash curl python3 py3-pip git jq poppler-utils imagemagick
 
 # Include urunit init for Linux guests (optional but recommended per blog)
 COPY --from=harbor.nbfc.io/nubificus/urunit:latest /urunit /urunit

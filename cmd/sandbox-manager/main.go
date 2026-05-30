@@ -1,6 +1,6 @@
 // cmd/sandbox-manager/main.go
 //
-// AI Agent Per-Tool Sandbox Manager — Demo Entry Point
+// # AI Agent Per-Tool Sandbox Manager — Demo Entry Point
 //
 // What this demonstrates
 // ──────────────────────
@@ -14,13 +14,15 @@
 // network but no mounts.
 //
 // The result is defence-in-depth:
-//   compromised tool → escape only that tool's microVM, nothing else.
+//
+//	compromised tool → escape only that tool's microVM, nothing else.
 //
 // References used throughout:
-//   https://urunc.io/installation/
-//   https://urunc.io/quickstart/
-//   https://urunc.io/design/
-//   https://nubificus.co.uk/blog/urunc_agent/
+//
+//	https://urunc.io/installation/
+//	https://urunc.io/quickstart/
+//	https://urunc.io/design/
+//	https://nubificus.co.uk/blog/urunc_agent/
 package main
 
 import (
@@ -41,10 +43,16 @@ func main() {
 	demoMode := flag.Bool("demo", false, "run live tool execution (requires urunc installed)")
 	profileOnly := flag.Bool("profile", false, "print isolation profiles and exit (no containers needed)")
 	verifyOnly := flag.Bool("verify", false, "run urunc quickstart verification and exit")
+	policyPath := flag.String("policy", "", "path to declarative policy YAML (e.g. configs/policies.yaml); empty uses built-in defaults")
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "", log.Ltime)
-	mgr := sandbox.NewManager(*workspaceDir, logger)
+	var mgr *sandbox.Manager
+	if *policyPath != "" {
+		mgr = sandbox.NewManagerFromPolicy(*policyPath, *workspaceDir, logger)
+	} else {
+		mgr = sandbox.NewManager(*workspaceDir, logger)
+	}
 
 	// ── Banner ───────────────────────────────────────────────────────────────
 	fmt.Println()

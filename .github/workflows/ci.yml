@@ -1,0 +1,46 @@
+name: CI
+
+# Builds, vets, formats, and unit-tests the platform on every push/PR.
+# urunc-dependent integration tests (scripts/integration-test.sh) run only
+# inside the Lima VM, not here — CI has no urunc/KVM. See docs/URUNC.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Verify gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build all binaries
+        run: |
+          go build -o /tmp/sandbox-manager ./cmd/sandbox-manager
+          go build -o /tmp/mcp-server      ./cmd/mcp-server
+          go build -o /tmp/api-server      ./cmd/api-server
+
+      - name: Unit tests
+        run: go test -race -count=1 ./...
+
+      - name: Policy loads (smoke)
+        run: |
+          /tmp/sandbox-manager --profile --policy configs/policies.yaml \
+            | grep -q "loaded" && echo "policy OK"

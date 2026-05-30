@@ -4,9 +4,11 @@
 // tool must run inside when executed via urunc.
 //
 // Design reference: https://nubificus.co.uk/blog/urunc_agent/
-//   "urunc can be used in two ways: a) as a sandbox for the entire agent,
-//    or b) as a sandbox for specific application executions triggered by
-//    the agent."
+//
+//	"urunc can be used in two ways: a) as a sandbox for the entire agent,
+//	 or b) as a sandbox for specific application executions triggered by
+//	 the agent."
+//
 // This project implements approach (b): per-tool sandboxing.
 //
 // urunc annotations reference: https://urunc.io/package/
@@ -34,10 +36,38 @@ const (
 	NetworkBridge NetworkMode = "bridge" // default bridge via CNI
 )
 
+// Monitor is the urunc VM/sandbox monitor (hypervisor) a tool runs under.
+// Mapped to the OCI annotation com.urunc.unikernel.hypervisor.
+// Reference: https://urunc.io/hypervisor-support/
+// NOTE: Linux-based tool images only run on QEMU or Firecracker. Solo5
+// (hvt/spt) supports Rumprun/MirageOS only — do not use it for Linux tools.
+type Monitor string
+
+const (
+	MonitorQEMU        Monitor = "qemu"        // full Linux compatibility, most tested
+	MonitorFirecracker Monitor = "firecracker" // fast cold-start; Linux support can be flaky
+)
+
+// UnikernelType is the com.urunc.unikernel.unikernelType annotation value.
+// Reference: https://urunc.io/package/
+type UnikernelType string
+
+const (
+	UnikernelLinux    UnikernelType = "linux"    // default: Linux kernel as a microVM
+	UnikernelUnikraft UnikernelType = "unikraft" // real unikernel (showcase tools)
+	UnikernelRumprun  UnikernelType = "rumprun"  // real unikernel (Solo5 monitors)
+)
+
+// SeccompMode selects the seccomp profile applied to the sandbox.
+// "" or "default" → nerdctl default profile; "unconfined" → no filtering;
+// any other value → path to a custom seccomp profile JSON.
+type SeccompMode string
+
 // MountSpec describes a single bind-mount for the sandbox.
 // References: https://nubificus.co.uk/blog/urunc_agent/ (Step 3: Sharing data)
-//   "nerdctl run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
-//   "use with caution"
+//
+//	"nerdctl run --runtime io.containerd.urunc.v2 -v ${PWD}/mydir:/mydir"
+//	"use with caution"
 type MountSpec struct {
 	HostPath      string // absolute path on the host / Lima guest
 	ContainerPath string // path inside the microVM
@@ -75,6 +105,44 @@ type IsolationProfile struct {
 
 	// Human-readable reason for each permission decision (for audit log).
 	Rationale string
+
+	// ── Extended isolation dimensions (all zero-value safe) ──────────────────
+	// A zero value reproduces the original behaviour exactly, so existing
+	// code that builds an IsolationProfile without these fields is unaffected.
+
+	// Monitor overrides the hypervisor via com.urunc.unikernel.hypervisor.
+	// "" → use the image's baked-in monitor (no override).
+	Monitor Monitor
+
+	// UnikernelType is informational + guards the monitor override (we only
+	// override the hypervisor for Linux unikernels). "" is treated as linux.
+	UnikernelType UnikernelType
+
+	// EgressAllowlist is a DECLARED policy of allowed destinations.
+	// HONEST LIMITATION: nerdctl/urunc cannot enforce per-destination egress
+	// today — bridge grants full egress. This is surfaced in audit/metrics and
+	// logged as a warning; real enforcement needs a chained CNI firewall plugin.
+	EgressAllowlist []string
+
+	// Seccomp profile mode. "" / "default" / "unconfined" / "<path-to-json>".
+	Seccomp SeccompMode
+
+	// ReadOnlyRootfs maps to nerdctl --read-only (immutable guest rootfs).
+	ReadOnlyRootfs bool
+
+	// TimeoutSeconds caps a single execution. 0 → manager's default applies.
+	TimeoutSeconds int
+
+	// Annotations are extra com.urunc.unikernel.* (or other) annotations
+	// passed verbatim as --annotation k=v.
+	Annotations map[string]string
+
+	// Category groups tools for discovery in /api/v1/tools (e.g. "compute").
+	Category string
+
+	// Description is a human-facing summary distinct from Rationale; used as
+	// the MCP tool description.
+	Description string
 }
 
 // ToolDef combines the logical identity of a tool with its isolation profile.
@@ -85,15 +153,17 @@ type ToolDef struct {
 }
 
 // Registry holds all registered tool definitions.
+// order preserves registration order so All() / listings are deterministic.
 type Registry struct {
 	tools map[ToolType]*ToolDef
+	order []ToolType
 }
 
 // NewRegistry builds the default tool registry.
 // Every entry follows the principle of least privilege:
 // a tool gets only the access it strictly requires.
 func NewRegistry(workspaceDir string) *Registry {
-	r := &Registry{tools: make(map[ToolType]*ToolDef)}
+	r := &Registry{tools: make(map[ToolType]*ToolDef), order: make([]ToolType, 0, 4)}
 
 	// ── file_tool ────────────────────────────────────────────────────────────
 	// Reads / writes files inside the workspace only.
@@ -176,7 +246,21 @@ func NewRegistry(workspaceDir string) *Registry {
 	return r
 }
 
+// NewRegistryFromDefs builds a Registry from explicit tool definitions.
+// Used by pkg/policy to construct a registry from a parsed YAML policy file,
+// since the tools map and register() are unexported.
+func NewRegistryFromDefs(defs []*ToolDef) *Registry {
+	r := &Registry{tools: make(map[ToolType]*ToolDef), order: make([]ToolType, 0, len(defs))}
+	for _, d := range defs {
+		r.register(d)
+	}
+	return r
+}
+
 func (r *Registry) register(t *ToolDef) {
+	if _, exists := r.tools[t.Type]; !exists {
+		r.order = append(r.order, t.Type)
+	}
 	r.tools[t.Type] = t
 }
 
@@ -189,11 +273,11 @@ func (r *Registry) Get(tt ToolType) (*ToolDef, error) {
 	return t, nil
 }
 
-// All returns every registered tool definition.
+// All returns every registered tool definition in registration order.
 func (r *Registry) All() []*ToolDef {
-	out := make([]*ToolDef, 0, len(r.tools))
-	for _, t := range r.tools {
-		out = append(out, t)
+	out := make([]*ToolDef, 0, len(r.order))
+	for _, tt := range r.order {
+		out = append(out, r.tools[tt])
 	}
 	return out
 }

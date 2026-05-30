@@ -1,0 +1,40 @@
+{
+  "_comment": "Strict seccomp profile for high-risk tools (e.g. code_tool). IMPORTANT: with urunc this profile filters the HOST-SIDE monitor process (QEMU), NOT syscalls inside the guest VM. The guest is already isolated by the hypervisor boundary; this profile is defence-in-depth that shrinks the monitor's host attack surface by denying syscalls a VMM never legitimately needs. defaultAction ALLOW + explicit denials keeps QEMU functional while blocking privilege-escalation / host-manipulation calls. See docs/adr/0003-seccomp-hardens-the-monitor.md.",
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "archMap": [
+    { "architecture": "SCMP_ARCH_X86_64", "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"] },
+    { "architecture": "SCMP_ARCH_AARCH64", "subArchitectures": ["SCMP_ARCH_ARM"] }
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "kexec_load",
+        "kexec_file_load",
+        "init_module",
+        "finit_module",
+        "delete_module",
+        "mount",
+        "umount2",
+        "pivot_root",
+        "chroot",
+        "ptrace",
+        "process_vm_readv",
+        "process_vm_writev",
+        "reboot",
+        "settimeofday",
+        "clock_settime",
+        "swapon",
+        "swapoff",
+        "acct",
+        "bpf",
+        "perf_event_open",
+        "add_key",
+        "request_key",
+        "keyctl"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Deny module loading, host mount/namespace manipulation, kernel control, ptrace, eBPF, and keyring access. A QEMU monitor needs none of these; denying them shrinks the host attack surface if the monitor is compromised."
+    }
+  ]
+}

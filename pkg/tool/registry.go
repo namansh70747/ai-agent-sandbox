@@ -54,7 +54,8 @@ type EnvVar struct {
 // Every field maps to a concrete nerdctl flag or urunc annotation.
 type IsolationProfile struct {
 	// Container image to use.
-	// Pre-built urunc images: harbor.nbfc.io/nubificus/urunc/…
+	// Built locally by scripts/01-build-tool-images.sh → localhost/ai-sandbox/base-tool:latest
+	// Alpine + bash + curl + python3 + /urunit init, packaged with bunny Containerfile syntax.
 	Image string
 
 	// Memory limit for the microVM (maps to nerdctl -m / --memory).

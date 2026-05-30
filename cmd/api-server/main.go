@@ -78,8 +78,11 @@ func main() {
 	// ── SSE transport — mcp-go SSEServer implements http.Handler ─────────────
 	// WithBaseURL tells the SSE server what URL to embed in the `endpoint` event
 	// so connecting clients get a fully-qualified message URL.
+	// WithBaseURL must include the /mcp prefix so the SSE server generates
+	// the correct message endpoint URL: http://localhost:8080/mcp/message
+	// Without it clients are told to POST to /message which is not registered.
 	sseSrv := server.NewSSEServer(mcpSrv,
-		server.WithBaseURL(fmt.Sprintf("http://localhost%s", *addr)),
+		server.WithBaseURL(fmt.Sprintf("http://localhost%s/mcp", *addr)),
 	)
 
 	// ── HTTP mux ──────────────────────────────────────────────────────────────

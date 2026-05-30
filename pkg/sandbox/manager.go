@@ -85,6 +85,9 @@ func (m *Manager) Execute(ctx context.Context, toolType tool.ToolType, cmd []str
 	if runErr != nil {
 		if ee, ok := runErr.(*exec.ExitError); ok {
 			exitCode = ee.ExitCode()
+		} else {
+			// context cancelled, signal killed, binary not found, etc.
+			exitCode = -1
 		}
 	}
 
